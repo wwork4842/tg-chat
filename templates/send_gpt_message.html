@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Send ChatGPT Message</title>
+  <style>
+    body { font-family: sans-serif; padding: 2em; }
+    form { max-width: 600px; }
+    label { display: block; margin-top: 1em; }
+    textarea { width: 100%; height: 100px; }
+    select, textarea, button { margin-top: 0.5em; }
+  </style>
+</head>
+<body>
+<h2>Send a GPT-generated message to Telegram User</h2>
+
+<form method="post" action="/send-gpt-message">
+  <label for="user_id">Select User:</label>
+  <select name="user_id" id="user_id">
+    {% if users %}
+      {% for user in users %}
+        <option value="{{ user.id }}">{{ user.name }}</option>
+      {% endfor %}
+    {% else %}
+      <option disabled>No users available</option>
+    {% endif %}
+  </select>
+
+  <label for="instruction">Instruction to ChatGPT:</label>
+  <textarea name="instruction" id="instruction" required></textarea>
+
+  <button type="submit">Send via ChatGPT</button>
+</form>
+
+{% if success %}
+  <p style="color: green;">Message sent: {{ sent_text }}</p>
+{% elif error %}
+  <p style="color: red;">Error: {{ error }}</p>
+{% endif %}
+
+</body>
+</html>
