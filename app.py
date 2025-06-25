@@ -10,7 +10,12 @@ from telethon.errors import PeerIdInvalidError
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from datetime import datetime
-from typing import List
+from typing import List, Dict
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load credentials from .env
 load_dotenv()
@@ -26,49 +31,76 @@ templates = Jinja2Templates(directory="templates")
 started = False
 auto_reply_users = set()
 AUTO_REPLY_FILE = "auto_reply_users.json"
+CHAT_HISTORY_FILE = "chat_history.json"
+CHAT_HISTORY: Dict[int, List[Dict]] = {}
 
-# Load auto-reply users from JSON file
-def load_auto_reply_users():
-    global auto_reply_users
+
+# Load auto-reply users and chat history from JSON files
+def load_data():
+    global auto_reply_users, CHAT_HISTORY
     try:
         if os.path.exists(AUTO_REPLY_FILE):
             with open(AUTO_REPLY_FILE, "r") as f:
                 auto_reply_users.update(set(json.load(f)))
+        if os.path.exists(CHAT_HISTORY_FILE):
+            with open(CHAT_HISTORY_FILE, "r") as f:
+                CHAT_HISTORY.update(json.load(f))
     except Exception as e:
-        print(f"Error loading auto-reply users: {e}")
+        logger.error(f"Error loading data: {e}")
 
-# Save auto-reply users to JSON file
-def save_auto_reply_users():
+
+# Save auto-reply users and chat history to JSON files
+def save_data():
     try:
         with open(AUTO_REPLY_FILE, "w") as f:
             json.dump(list(auto_reply_users), f)
+        with open(CHAT_HISTORY_FILE, "w") as f:
+            json.dump(CHAT_HISTORY, f)
     except Exception as e:
-        print(f"Error saving auto-reply users: {e}")
+        logger.error(f"Error saving data: {e}")
 
-# ChatGPT Response Helper
-async def ask_chatgpt(prompt: str) -> str:
+
+# ChatGPT Response Helper with Context
+async def ask_chatgpt(user_id: int, prompt: str, send_message: bool = True) -> str:
     try:
+        # Initialize history for new user
+        if user_id not in CHAT_HISTORY:
+            CHAT_HISTORY[user_id] = [{"role": "system", "content": "You are a helpful assistant."}]
+
+        # Append the new user message
+        CHAT_HISTORY[user_id].append({"role": "user", "content": prompt})
+
+        # Send the full conversation history to OpenAI
         response = await client_gpt.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt}
-            ]
+            messages=CHAT_HISTORY[user_id]
         )
+
+        # Append the assistant's response to history
+        CHAT_HISTORY[user_id].append({"role": "assistant", "content": response.choices[0].message.content})
+
+        # Save updated history
+        save_data()
+
         return response.choices[0].message.content
     except Exception as e:
-        print(f"Error from OpenAI: {e}")
+        logger.error(f"Error from OpenAI: {e}")
         return "Sorry, I couldn't generate a reply right now."
+
 
 # Incoming message handler — auto-reply to selected users only
 @client.on(NewMessage(incoming=True))
 async def handle_message(event):
     sender = await event.get_sender()
     text = event.raw_text
+    if sender is None:
+        logger.warning("Received message with no sender, skipping auto-reply.")
+        return
     if not text.strip() or sender.id not in auto_reply_users:
         return
-    response = await ask_chatgpt(text)
+    response = await ask_chatgpt(sender.id, text)
     await client.send_message(sender.id, response)
+
 
 # Helper: Fetch last 10 messages for a user
 async def get_last_messages(user_id: int, limit: int = 10):
@@ -81,25 +113,33 @@ async def get_last_messages(user_id: int, limit: int = 10):
                 messages.append({
                     "sender": sender_name,
                     "text": msg.text,
-                    "timestamp": msg.date.strftime("%Y-%m-%d %H:%M:%S")
+                    "timestamp": msg.date.strftime("%Y-%m-%d %H:M:S")
                 })
         return messages[::-1]  # Reverse to show newest last
     except Exception as e:
-        print(f"Error fetching messages: {e}")
+        logger.error(f"Error fetching messages: {e}")
         return []
+
 
 # Startup
 @app.on_event("startup")
 async def startup_event():
     global started
     if not started:
-        load_auto_reply_users()
+        load_data()
         await client.connect()
         if not await client.is_user_authorized():
             await client.send_code_request(PHONE_NUMBER)
             code = input("Enter Telegram login code: ")
             await client.sign_in(PHONE_NUMBER, code)
         started = True
+
+
+# Shutdown
+@app.on_event("shutdown")
+async def shutdown_event():
+    save_data()
+
 
 # Helper: Users only
 async def get_dialog_user_list():
@@ -115,6 +155,7 @@ async def get_dialog_user_list():
             })
     return users
 
+
 # GPT-to-user message interface
 @app.get("/", response_class=HTMLResponse)
 async def gpt_message_form(request: Request):
@@ -123,15 +164,18 @@ async def gpt_message_form(request: Request):
         "request": request,
         "users": users,
         "messages": [],
-        "selected_user_ids": []
+        "selected_user_ids": [],
+        "preview_text": None,
+        "context_preview_text": None  # New field for context update preview
     })
+
 
 @app.post("/", response_class=HTMLResponse)
 async def send_gpt_message(
-    request: Request,
-    user_ids: List[int] = Form(default=[]),
-    custom_user_id: str = Form(""),
-    instruction: str = Form(...)
+        request: Request,
+        user_ids: List[int] = Form(default=[]),
+        custom_user_id: str = Form(""),
+        instruction: str = Form(...)
 ):
     try:
         # Parse custom user IDs (comma-separated)
@@ -156,11 +200,9 @@ async def send_gpt_message(
             except PeerIdInvalidError:
                 raise ValueError(f"Invalid Telegram user ID {target_id} or the user is not accessible.")
 
-        # Generate and send message to all target users
-        generated_message = await ask_chatgpt(
-            f"Write a polite and clear message to the user based on this instruction: {instruction}"
-        )
+        # Generate and send message to all target users with individual context
         for target_id in target_ids:
+            generated_message = await ask_chatgpt(target_id, instruction)
             await client.send_message(target_id, generated_message)
 
         users = await get_dialog_user_list()
@@ -168,10 +210,12 @@ async def send_gpt_message(
             "request": request,
             "users": users,
             "success": True,
-            "sent_text": generated_message,
+            "sent_text": "Messages sent with context to all selected users.",
             "selected_user_ids": target_ids,
             "custom_user_id": custom_user_id,
-            "messages": []
+            "messages": [],
+            "preview_text": None,
+            "context_preview_text": None
         })
     except Exception as e:
         users = await get_dialog_user_list()
@@ -181,14 +225,17 @@ async def send_gpt_message(
             "error": str(e),
             "selected_user_ids": user_ids,
             "custom_user_id": custom_user_id,
-            "messages": []
+            "messages": [],
+            "preview_text": None,
+            "context_preview_text": None
         })
+
 
 @app.post("/get-messages", response_class=HTMLResponse)
 async def get_messages(
-    request: Request,
-    user_ids: List[int] = Form(default=[]),
-    custom_user_id: str = Form("")
+        request: Request,
+        user_ids: List[int] = Form(default=[]),
+        custom_user_id: str = Form("")
 ):
     try:
         # Parse custom user IDs
@@ -222,7 +269,9 @@ async def get_messages(
             "users": users,
             "selected_user_ids": target_ids,
             "custom_user_id": custom_user_id,
-            "messages": messages
+            "messages": messages,
+            "preview_text": None,
+            "context_preview_text": None
         })
     except Exception as e:
         users = await get_dialog_user_list()
@@ -232,14 +281,17 @@ async def get_messages(
             "error": str(e),
             "selected_user_ids": user_ids,
             "custom_user_id": custom_user_id,
-            "messages": []
+            "messages": [],
+            "preview_text": None,
+            "context_preview_text": None
         })
+
 
 @app.post("/toggle-auto-reply", response_class=HTMLResponse)
 async def toggle_auto_reply(
-    request: Request,
-    user_ids: List[int] = Form(default=[]),
-    custom_user_id: str = Form("")
+        request: Request,
+        user_ids: List[int] = Form(default=[]),
+        custom_user_id: str = Form("")
 ):
     try:
         # Parse custom user IDs
@@ -271,7 +323,7 @@ async def toggle_auto_reply(
                 auto_reply_users.add(target_id)
             else:
                 auto_reply_users.discard(target_id)
-        save_auto_reply_users()
+        save_data()
 
         users = await get_dialog_user_list()
         return templates.TemplateResponse("index.html", {
@@ -281,7 +333,9 @@ async def toggle_auto_reply(
             "sent_text": f"Auto-reply {'enabled' if should_enable else 'disabled'} for selected users.",
             "selected_user_ids": target_ids,
             "custom_user_id": custom_user_id,
-            "messages": []
+            "messages": [],
+            "preview_text": None,
+            "context_preview_text": None
         })
     except Exception as e:
         users = await get_dialog_user_list()
@@ -291,5 +345,163 @@ async def toggle_auto_reply(
             "error": str(e),
             "selected_user_ids": user_ids,
             "custom_user_id": custom_user_id,
-            "messages": []
+            "messages": [],
+            "preview_text": None,
+            "context_preview_text": None
+        })
+
+
+@app.post("/preview-response", response_class=HTMLResponse)
+async def preview_response(
+        request: Request,
+        user_ids: List[int] = Form(default=[]),
+        custom_user_id: str = Form(""),
+        instruction: str = Form(...)
+):
+    try:
+        # Parse custom user IDs (comma-separated)
+        custom_ids = []
+        if custom_user_id.strip():
+            try:
+                custom_ids = [int(id.strip()) for id in custom_user_id.split(",") if id.strip()]
+            except ValueError:
+                raise ValueError("Custom user IDs must be numeric and comma-separated.")
+
+        # Combine user IDs from checkboxes and custom input
+        target_ids = list(set(user_ids + custom_ids))
+        if not target_ids:
+            raise ValueError("Please select at least one contact or provide a custom user ID.")
+        if not instruction.strip():
+            raise ValueError("Please provide an instruction for ChatGPT.")
+
+        # Generate preview message (using the first target_id for context as a reference)
+        preview_text = await ask_chatgpt(target_ids[0], instruction, send_message=False)
+
+        users = await get_dialog_user_list()
+        return templates.TemplateResponse("index.html", {
+            "request": request,
+            "users": users,
+            "selected_user_ids": user_ids,
+            "custom_user_id": custom_user_id,
+            "messages": [],
+            "preview_text": preview_text,
+            "context_preview_text": None
+        })
+    except Exception as e:
+        users = await get_dialog_user_list()
+        return templates.TemplateResponse("index.html", {
+            "request": request,
+            "users": users,
+            "error": str(e),
+            "selected_user_ids": user_ids,
+            "custom_user_id": custom_user_id,
+            "messages": [],
+            "preview_text": None,
+            "context_preview_text": None
+        })
+
+
+@app.post("/update-context", response_class=HTMLResponse)
+async def update_context(
+        request: Request,
+        user_ids: List[int] = Form(default=[]),
+        custom_user_id: str = Form(""),
+        instruction: str = Form(...)
+):
+    try:
+        # Parse custom user IDs (comma-separated)
+        custom_ids = []
+        if custom_user_id.strip():
+            try:
+                custom_ids = [int(id.strip()) for id in custom_user_id.split(",") if id.strip()]
+            except ValueError:
+                raise ValueError("Custom user IDs must be numeric and comma-separated.")
+
+        # Combine user IDs from checkboxes and custom input
+        target_ids = list(set(user_ids + custom_ids))
+        if not target_ids:
+            raise ValueError("Please select at least one contact or provide a custom user ID.")
+        if not instruction.strip():
+            raise ValueError("Please provide an instruction for context update.")
+
+        # Generate context update response for the first target_id as a reference
+        context_preview_text = await ask_chatgpt(target_ids[0], instruction, send_message=False)
+
+        users = await get_dialog_user_list()
+        return templates.TemplateResponse("index.html", {
+            "request": request,
+            "users": users,
+            "selected_user_ids": user_ids,
+            "custom_user_id": custom_user_id,
+            "messages": [],
+            "preview_text": None,
+            "context_preview_text": context_preview_text
+        })
+    except Exception as e:
+        users = await get_dialog_user_list()
+        return templates.TemplateResponse("index.html", {
+            "request": request,
+            "users": users,
+            "error": str(e),
+            "selected_user_ids": user_ids,
+            "custom_user_id": custom_user_id,
+            "messages": [],
+            "preview_text": None,
+            "context_preview_text": None
+        })
+
+
+@app.post("/send-preview", response_class=HTMLResponse)
+async def send_preview(
+        request: Request,
+        user_ids: List[int] = Form(default=[]),
+        custom_user_id: str = Form(""),
+        preview_text: str = Form(...)
+):
+    logger.info(
+        f"Sending preview - user_ids: {user_ids}, custom_user_id: {custom_user_id}, preview_text: {preview_text}")
+    try:
+        # Parse custom user IDs (comma-separated)
+        custom_ids = []
+        if custom_user_id.strip():
+            try:
+                custom_ids = [int(id.strip()) for id in custom_user_id.split(",") if id.strip()]
+            except ValueError:
+                raise ValueError("Custom user IDs must be numeric and comma-separated.")
+
+        # Combine user IDs from checkboxes and custom input
+        target_ids = list(set(user_ids + custom_ids))
+        if not target_ids:
+            raise ValueError("Please select at least one contact or provide a custom user ID.")
+        if not preview_text.strip():
+            raise ValueError("No preview text available to send.")
+
+        # Send the preview text to all target users
+        for target_id in target_ids:
+            await client.send_message(target_id, preview_text)
+
+        users = await get_dialog_user_list()
+        return templates.TemplateResponse("index.html", {
+            "request": request,
+            "users": users,
+            "success": True,
+            "sent_text": preview_text,
+            "selected_user_ids": user_ids,
+            "custom_user_id": custom_user_id,
+            "messages": [],
+            "preview_text": None,
+            "context_preview_text": None
+        })
+    except Exception as e:
+        logger.error(f"Error in send_preview: {e}")
+        users = await get_dialog_user_list()
+        return templates.TemplateResponse("index.html", {
+            "request": request,
+            "users": users,
+            "error": str(e),
+            "selected_user_ids": user_ids,
+            "custom_user_id": custom_user_id,
+            "messages": [],
+            "preview_text": None,
+            "context_preview_text": None
         })

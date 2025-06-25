@@ -105,6 +105,7 @@
             border-radius: 4px;
             max-height: 300px;
             overflow-y: auto;
+            display: {% if messages %}block{% else %}none{% endif %};
         }
         .message-history h3 {
             margin-top: 0;
@@ -133,6 +134,32 @@
             margin: 15px 0;
             display: flex;
             gap: 10px;
+        }
+        .preview-area {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            display: {% if preview_text or context_preview_text %}block{% else %}none{% endif %};
+        }
+        .preview-textarea {
+            width: 100%;
+            min-height: 100px;
+            resize: vertical;
+        }
+        .context-area {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #e0e0e0;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            display: {% if context_preview_text %}block{% else %}none{% endif %};
+        }
+        .context-textarea {
+            width: 100%;
+            min-height: 100px;
+            resize: vertical;
         }
     </style>
 </head>
@@ -166,14 +193,30 @@
 
             <div class="form-group">
                 <label for="instruction">Instruction to ChatGPT</label>
-                <textarea name="instruction" id="instruction" placeholder="Enter your instruction for ChatGPT..." required></textarea>
+                <textarea name="instruction" id="instruction" placeholder="Enter your instruction for ChatGPT..." required>{{ instruction if instruction is defined else "" }}</textarea>
             </div>
 
             <div class="button-group">
                 <button type="submit" onclick="return validateSendForm()">Send Message</button>
-                <button type="button" onclick="submitHistoryForm()">View Message History</button>
+                <button type="button" id="view-history-button" onclick="viewHistory()">View Message History</button>
+                <button type="submit" formaction="/preview-response" onclick="return validatePreviewForm()">Preview Response</button>
+                <button type="button" id="send-preview-button" onclick="sendPreviewManually()" style="display: {% if preview_text %}inline-block{% else %}none{% endif %};">Send Preview</button>
+                <button type="submit" formaction="/update-context" onclick="return validateUpdateContextForm()">Update Context</button>
                 <button type="button" onclick="submitToggleForm()">Toggle Auto-Reply</button>
             </div>
+
+            {% if preview_text %}
+                <div class="preview-area">
+                    <h4>Editable Preview Response</h4>
+                    <textarea class="preview-textarea" id="editable_preview_text" name="preview_text">{{ preview_text }}</textarea>
+                </div>
+            {% endif %}
+            {% if context_preview_text %}
+                <div class="context-area">
+                    <h4>Context Update Preview</h4>
+                    <textarea class="context-textarea" id="context_preview_text" name="context_preview_text" readonly>{{ context_preview_text }}</readonly>
+                </div>
+            {% endif %}
         </form>
 
         <form method="post" action="/get-messages" id="history-form" style="display: none;">
@@ -186,6 +229,30 @@
             <input type="hidden" name="custom_user_id" id="toggle_custom_user_id">
         </form>
 
+        <form method="post" action="/send-preview" id="send-preview-form" style="display: none;">
+            <input type="hidden" name="user_ids" id="send_preview_user_ids">
+            <input type="hidden" name="custom_user_id" id="send_preview_custom_user_id">
+            <input type="hidden" name="preview_text" id="send_preview_text">
+        </form>
+
+        {% if messages %}
+            <div class="message-history" id="message-history">
+                <h3>Last 10 Messages</h3>
+                {% for message in messages %}
+                    <div class="message-item">
+                        <div class="message-sender">{{ message.sender}}</div>
+                        <div class="message-timestamp">{{ message.timestamp}}</div>
+                        <div class="message-text">{{ message.text}}</div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="message-history" id="message-history" style="display: none;">
+                <h3>Last 10 Messages</h3>
+                <!-- Placeholder -->
+            </div>
+        {% endif %}
+
         {% if success %}
             <div class="message success">
                 <strong>Success!</strong> {{ sent_text }}
@@ -195,43 +262,119 @@
                 <strong>Error:</strong> {{ error }}
             </div>
         {% endif %}
-
-        {% if messages %}
-            <div class="message-history">
-                <h3>Last 10 Messages</h3>
-                {% for message in messages %}
-                    <div class="message-item">
-                        <div class="message-sender">{{ message.sender }}</div>
-                        <div class="message-timestamp">{{ message.timestamp }}</div>
-                        <div class="message-text">{{ message.text }}</div>
-                    </div>
-                {% endfor %}
-            </div>
-        {% endif %}
     </div>
 
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script>
+        let lastUserIds = {{ selected_user_ids | tojson }};
+        let lastCustomUserId = {{ custom_user_id | default('') | tojson }};
+
         function validateSendForm() {
             const userIds = document.querySelectorAll('input[name="user_ids"]:checked');
             const customUserId = document.getElementById('custom_user_id').value.trim();
+            const instruction = document.getElementById('instruction').value.trim();
             if (userIds.length === 0 && !customUserId) {
                 alert('Please select at least one contact or enter a Telegram user ID.');
+                return false;
+            }
+            if (!instruction) {
+                alert('Please provide an instruction for ChatGPT.');
                 return false;
             }
             return true;
         }
 
-        function submitHistoryForm() {
+        function validatePreviewForm() {
+            const userIds = document.querySelectorAll('input[name="user_ids"]:checked');
+            const customUserId = document.getElementById('custom_user_id').value.trim();
+            const instruction = document.getElementById('instruction').value.trim();
+            console.log('Preview clicked - userIds:', userIds, 'customUserId:', customUserId, 'instruction:', instruction);
+            if (userIds.length === 0 && !customUserId) {
+                alert('Please select at least one contact or enter a Telegram user ID.');
+                return false;
+            }
+            if (!instruction) {
+                alert('Please provide an instruction for ChatGPT.');
+                return false;
+            }
+            return true;
+        }
+
+        function validateUpdateContextForm() {
+            const userIds = document.querySelectorAll('input[name="user_ids"]:checked');
+            const customUserId = document.getElementById('custom_user_id').value.trim();
+            const instruction = document.getElementById('instruction').value.trim();
+            console.log('Update Context clicked - userIds:', userIds, 'customUserId:', customUserId, 'instruction:', instruction);
+            if (userIds.length === 0 && !customUserId) {
+                alert('Please select at least one contact or enter a Telegram user ID.');
+                return false;
+            }
+            if (!instruction) {
+                alert('Please provide an instruction for context update.');
+                return false;
+            }
+            return true;
+        }
+
+        function validateSendPreviewForm() {
+            const userIds = document.querySelectorAll('input[name="user_ids"]:checked');
+            const customUserId = document.getElementById('custom_user_id').value.trim();
+            const previewText = document.getElementById('editable_preview_text').value.trim();
+            console.log('Send Preview clicked - userIds:', userIds, 'customUserId:', customUserId, 'previewText:', previewText);
+            if (userIds.length === 0 && !customUserId) {
+                alert('Please select at least one contact or enter a Telegram user ID.');
+                return false;
+            }
+            if (!previewText) {
+                alert('No preview text available to send. Please generate a preview first.');
+                return false;
+            }
+            return true;
+        }
+
+        function sendPreviewManually() {
+            if (validateSendPreviewForm()) {
+                const form = $('#send-preview-form');
+                const userIds = Array.from(document.querySelectorAll('input[name="user_ids"]:checked'))
+                    .map(input => input.value).join(',');
+                const customUserId = document.getElementById('custom_user_id').value.trim();
+                const previewText = document.getElementById('editable_preview_text').value.trim();
+
+                form.find('#send_preview_user_ids').val(userIds);
+                form.find('#send_preview_custom_user_id').val(customUserId);
+                form.find('#send_preview_text').val(previewText);
+
+                console.log('Submitting preview form with:', {
+                    user_ids: userIds,
+                    custom_user_id: customUserId,
+                    preview_text: previewText
+                });
+
+                form.submit();
+            }
+        }
+
+        function viewHistory() {
             const userIds = Array.from(document.querySelectorAll('input[name="user_ids"]:checked'))
                 .map(input => input.value);
             const customUserId = document.getElementById('custom_user_id').value.trim();
+
             if (userIds.length === 0 && !customUserId) {
                 alert('Please select at least one contact or enter a Telegram user ID.');
                 return;
             }
-            document.getElementById('history_user_ids').value = userIds.join(',');
-            document.getElementById('history_custom_user_id').value = customUserId;
-            document.getElementById('history-form').submit();
+
+            // Check if user selection has changed
+            const userIdsChanged = JSON.stringify(userIds) !== JSON.stringify(lastUserIds) ||
+                                  customUserId !== lastCustomUserId;
+
+            if (userIdsChanged) {
+                lastUserIds = userIds;
+                lastCustomUserId = customUserId;
+                document.getElementById('history_user_ids').value = userIds.join(',');
+                document.getElementById('history_custom_user_id').value = customUserId;
+                document.getElementById('history-form').submit();
+            }
         }
 
         function submitToggleForm() {
