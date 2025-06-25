@@ -1,13 +1,16 @@
 import os
-import mimetypes
-from fastapi import FastAPI, Form, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+import json
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from telethon import TelegramClient
 from telethon.tl.types import User
 from telethon.events import NewMessage
+from telethon.errors import PeerIdInvalidError
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
+from datetime import datetime
+from typing import List
 
 # Load credentials from .env
 load_dotenv()
@@ -20,8 +23,27 @@ client_gpt = AsyncOpenAI(api_key=OPENAI_API_KEY)
 client = TelegramClient("web_session", API_ID, API_HASH)
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
-MEDIA_FOLDER = "media"
 started = False
+auto_reply_users = set()
+AUTO_REPLY_FILE = "auto_reply_users.json"
+
+# Load auto-reply users from JSON file
+def load_auto_reply_users():
+    global auto_reply_users
+    try:
+        if os.path.exists(AUTO_REPLY_FILE):
+            with open(AUTO_REPLY_FILE, "r") as f:
+                auto_reply_users.update(set(json.load(f)))
+    except Exception as e:
+        print(f"Error loading auto-reply users: {e}")
+
+# Save auto-reply users to JSON file
+def save_auto_reply_users():
+    try:
+        with open(AUTO_REPLY_FILE, "w") as f:
+            json.dump(list(auto_reply_users), f)
+    except Exception as e:
+        print(f"Error saving auto-reply users: {e}")
 
 # ChatGPT Response Helper
 async def ask_chatgpt(prompt: str) -> str:
@@ -38,53 +60,46 @@ async def ask_chatgpt(prompt: str) -> str:
         print(f"Error from OpenAI: {e}")
         return "Sorry, I couldn't generate a reply right now."
 
-# Incoming message handler
+# Incoming message handler — auto-reply to selected users only
 @client.on(NewMessage(incoming=True))
 async def handle_message(event):
     sender = await event.get_sender()
     text = event.raw_text
-    if not text.strip():
+    if not text.strip() or sender.id not in auto_reply_users:
         return
     response = await ask_chatgpt(text)
     await client.send_message(sender.id, response)
+
+# Helper: Fetch last 10 messages for a user
+async def get_last_messages(user_id: int, limit: int = 10):
+    try:
+        messages = []
+        async for msg in client.iter_messages(user_id, limit=limit):
+            if msg.text:
+                sender = await msg.get_sender()
+                sender_name = sender.username or sender.first_name or "Unknown" if sender else "Bot"
+                messages.append({
+                    "sender": sender_name,
+                    "text": msg.text,
+                    "timestamp": msg.date.strftime("%Y-%m-%d %H:%M:%S")
+                })
+        return messages[::-1]  # Reverse to show newest last
+    except Exception as e:
+        print(f"Error fetching messages: {e}")
+        return []
 
 # Startup
 @app.on_event("startup")
 async def startup_event():
     global started
-    os.makedirs(MEDIA_FOLDER, exist_ok=True)
     if not started:
+        load_auto_reply_users()
         await client.connect()
         if not await client.is_user_authorized():
             await client.send_code_request(PHONE_NUMBER)
             code = input("Enter Telegram login code: ")
             await client.sign_in(PHONE_NUMBER, code)
         started = True
-
-# Helper: List dialogs
-async def get_dialogs():
-    return [(d.id, d.name) for d in await client.get_dialogs()]
-
-# Helper: List last messages
-async def get_last_messages(chat_id: int, limit: int = 10):
-    messages = []
-    async for msg in client.iter_messages(chat_id, limit=limit):
-        if msg.text:
-            messages.append({"type": "text", "content": f"{msg.sender_id}: {msg.text}"})
-        elif msg.media:
-            filename = f"{msg.id}_{msg.file.name or 'file'}"
-            filepath = os.path.join(MEDIA_FOLDER, filename)
-            if not os.path.exists(filepath):
-                await msg.download_media(file=filepath)
-            ext = os.path.splitext(filename)[1].lower()
-            media_type = (
-                "image" if ext in [".jpg", ".jpeg", ".png", ".gif"]
-                else "video" if ext in [".mp4", ".mov", ".webm"]
-                else "audio" if ext in [".mp3", ".wav", ".ogg"]
-                else "file"
-            )
-            messages.append({"type": media_type, "filename": filename, "sender": msg.sender_id})
-    return messages[::-1]
 
 # Helper: Users only
 async def get_dialog_user_list():
@@ -93,88 +108,188 @@ async def get_dialog_user_list():
         entity = dialog.entity
         if isinstance(entity, User) and not entity.bot:
             name = f"{dialog.name} (@{entity.username})" if entity.username else dialog.name
-            users.append({"id": dialog.id, "name": name})
+            users.append({
+                "id": dialog.id,
+                "name": name,
+                "auto_reply": dialog.id in auto_reply_users
+            })
     return users
 
-# Main chat UI
-@app.get("/", response_class=HTMLResponse)
-async def form(request: Request):
-    dialogs = await get_dialogs()
-    return templates.TemplateResponse("index.html", {"request": request, "dialogs": dialogs, "messages": []})
-
-@app.post("/", response_class=HTMLResponse)
-async def send_message(request: Request, chat_id: int = Form(...), message: str = Form(None), read: str = Form(None)):
-    dialogs = await get_dialogs()
-    messages = []
-    if message:
-        await client.send_message(chat_id, message)
-    if read:
-        messages = await get_last_messages(chat_id)
-    return templates.TemplateResponse("index.html", {
-        "request": request,
-        "dialogs": dialogs,
-        "messages": messages,
-        "active_chat": chat_id,
-        "success": bool(message)
-    })
-
-# Upload media
-@app.post("/upload")
-async def upload_file(chat_id: int = Form(...), file: UploadFile = File(...)):
-    file_path = os.path.join(MEDIA_FOLDER, file.filename)
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
-    await client.send_file(chat_id, file_path)
-    return JSONResponse(content={"success": True})
-
-# List media
-@app.get("/files", response_class=HTMLResponse)
-async def list_files(request: Request):
-    files = []
-    for filename in os.listdir(MEDIA_FOLDER):
-        path = os.path.join(MEDIA_FOLDER, filename)
-        if os.path.isfile(path):
-            ext = os.path.splitext(filename)[1].lower()
-            media_type = (
-                "image" if ext in [".jpg", ".jpeg", ".png", ".gif"]
-                else "video" if ext in [".mp4", ".mov", ".webm"]
-                else "audio" if ext in [".mp3", ".wav", ".ogg"]
-                else "file"
-            )
-            files.append({"name": filename, "type": media_type})
-    return templates.TemplateResponse("files.html", {"request": request, "files": files})
-
-# Serve media
-@app.get("/media/{filename}")
-async def get_media(filename: str):
-    path = os.path.join(MEDIA_FOLDER, filename)
-    if os.path.exists(path):
-        mime_type, _ = mimetypes.guess_type(path)
-        return FileResponse(path, media_type=mime_type or "application/octet-stream")
-    return JSONResponse(content={"error": "File not found"}, status_code=404)
-
 # GPT-to-user message interface
-@app.get("/send-gpt-message", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse)
 async def gpt_message_form(request: Request):
     users = await get_dialog_user_list()
-    return templates.TemplateResponse("send_gpt_message.html", {"request": request, "users": users})
+    return templates.TemplateResponse("index.html", {
+        "request": request,
+        "users": users,
+        "messages": [],
+        "selected_user_ids": []
+    })
 
-@app.post("/send-gpt-message", response_class=HTMLResponse)
-async def send_gpt_message(request: Request, user_id: int = Form(...), instruction: str = Form(...)):
+@app.post("/", response_class=HTMLResponse)
+async def send_gpt_message(
+    request: Request,
+    user_ids: List[int] = Form(default=[]),
+    custom_user_id: str = Form(""),
+    instruction: str = Form(...)
+):
     try:
+        # Parse custom user IDs (comma-separated)
+        custom_ids = []
+        if custom_user_id.strip():
+            try:
+                custom_ids = [int(id.strip()) for id in custom_user_id.split(",") if id.strip()]
+            except ValueError:
+                raise ValueError("Custom user IDs must be numeric and comma-separated.")
+
+        # Combine user IDs from checkboxes and custom input
+        target_ids = list(set(user_ids + custom_ids))
+        if not target_ids:
+            raise ValueError("Please select at least one contact or provide a custom user ID.")
+
+        # Validate custom IDs
+        for target_id in custom_ids:
+            try:
+                entity = await client.get_entity(target_id)
+                if not isinstance(entity, User):
+                    raise ValueError(f"The ID {target_id} does not correspond to a user.")
+            except PeerIdInvalidError:
+                raise ValueError(f"Invalid Telegram user ID {target_id} or the user is not accessible.")
+
+        # Generate and send message to all target users
         generated_message = await ask_chatgpt(
             f"Write a polite and clear message to the user based on this instruction: {instruction}"
         )
-        await client.send_message(user_id, generated_message)
-        return templates.TemplateResponse("send_gpt_message.html", {
+        for target_id in target_ids:
+            await client.send_message(target_id, generated_message)
+
+        users = await get_dialog_user_list()
+        return templates.TemplateResponse("index.html", {
             "request": request,
-            "users": await get_dialog_user_list(),
+            "users": users,
             "success": True,
-            "sent_text": generated_message
+            "sent_text": generated_message,
+            "selected_user_ids": target_ids,
+            "custom_user_id": custom_user_id,
+            "messages": []
         })
     except Exception as e:
-        return templates.TemplateResponse("send_gpt_message.html", {
+        users = await get_dialog_user_list()
+        return templates.TemplateResponse("index.html", {
             "request": request,
-            "users": await get_dialog_user_list(),
-            "error": str(e)
+            "users": users,
+            "error": str(e),
+            "selected_user_ids": user_ids,
+            "custom_user_id": custom_user_id,
+            "messages": []
+        })
+
+@app.post("/get-messages", response_class=HTMLResponse)
+async def get_messages(
+    request: Request,
+    user_ids: List[int] = Form(default=[]),
+    custom_user_id: str = Form("")
+):
+    try:
+        # Parse custom user IDs
+        custom_ids = []
+        if custom_user_id.strip():
+            try:
+                custom_ids = [int(id.strip()) for id in custom_user_id.split(",") if id.strip()]
+            except ValueError:
+                raise ValueError("Custom user IDs must be numeric and comma-separated.")
+
+        # Combine user IDs
+        target_ids = list(set(user_ids + custom_ids))
+        if not target_ids:
+            raise ValueError("Please select at least one contact or provide a custom user ID.")
+
+        # Fetch messages for the first target ID
+        target_id = target_ids[0]
+        if target_id in custom_ids:
+            try:
+                entity = await client.get_entity(target_id)
+                if not isinstance(entity, User):
+                    raise ValueError(f"The ID {target_id} does not correspond to a user.")
+            except PeerIdInvalidError:
+                raise ValueError(f"Invalid Telegram user ID {target_id} or the user is not accessible.")
+
+        messages = await get_last_messages(target_id)
+
+        users = await get_dialog_user_list()
+        return templates.TemplateResponse("index.html", {
+            "request": request,
+            "users": users,
+            "selected_user_ids": target_ids,
+            "custom_user_id": custom_user_id,
+            "messages": messages
+        })
+    except Exception as e:
+        users = await get_dialog_user_list()
+        return templates.TemplateResponse("index.html", {
+            "request": request,
+            "users": users,
+            "error": str(e),
+            "selected_user_ids": user_ids,
+            "custom_user_id": custom_user_id,
+            "messages": []
+        })
+
+@app.post("/toggle-auto-reply", response_class=HTMLResponse)
+async def toggle_auto_reply(
+    request: Request,
+    user_ids: List[int] = Form(default=[]),
+    custom_user_id: str = Form("")
+):
+    try:
+        # Parse custom user IDs
+        custom_ids = []
+        if custom_user_id.strip():
+            try:
+                custom_ids = [int(id.strip()) for id in custom_user_id.split(",") if id.strip()]
+            except ValueError:
+                raise ValueError("Custom user IDs must be numeric and comma-separated.")
+
+        # Combine user IDs
+        target_ids = list(set(user_ids + custom_ids))
+        if not target_ids:
+            raise ValueError("Please select at least one contact or provide a custom user ID.")
+
+        # Validate custom IDs
+        for target_id in custom_ids:
+            try:
+                entity = await client.get_entity(target_id)
+                if not isinstance(entity, User):
+                    raise ValueError(f"The ID {target_id} does not correspond to a user.")
+            except PeerIdInvalidError:
+                raise ValueError(f"Invalid Telegram user ID {target_id} or the user is not accessible.")
+
+        # Determine toggle action: enable if any are disabled, else disable
+        should_enable = any(target_id not in auto_reply_users for target_id in target_ids)
+        for target_id in target_ids:
+            if should_enable:
+                auto_reply_users.add(target_id)
+            else:
+                auto_reply_users.discard(target_id)
+        save_auto_reply_users()
+
+        users = await get_dialog_user_list()
+        return templates.TemplateResponse("index.html", {
+            "request": request,
+            "users": users,
+            "success": True,
+            "sent_text": f"Auto-reply {'enabled' if should_enable else 'disabled'} for selected users.",
+            "selected_user_ids": target_ids,
+            "custom_user_id": custom_user_id,
+            "messages": []
+        })
+    except Exception as e:
+        users = await get_dialog_user_list()
+        return templates.TemplateResponse("index.html", {
+            "request": request,
+            "users": users,
+            "error": str(e),
+            "selected_user_ids": user_ids,
+            "custom_user_id": custom_user_id,
+            "messages": []
         })
