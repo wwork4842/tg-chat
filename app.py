@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 from typing import List, Dict
 import logging
+import sqlite3
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,31 +32,61 @@ templates = Jinja2Templates(directory="templates")
 started = False
 auto_reply_users = set()
 AUTO_REPLY_FILE = "auto_reply_users.json"
-CHAT_HISTORY_FILE = "chat_history.json"
 CHAT_HISTORY: Dict[int, List[Dict]] = {}
 
 
-# Load auto-reply users and chat history from JSON files
+# Initialize database
+def init_db():
+    try:
+        conn = sqlite3.connect("chat_history.db")
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS chat_history
+                     (
+                         user_id
+                         INTEGER
+                         PRIMARY
+                         KEY,
+                         history
+                         TEXT
+                     )''')
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error initializing database: {e}")
+
+
+# Load auto-reply users and chat history from SQLite
 def load_data():
     global auto_reply_users, CHAT_HISTORY
     try:
         if os.path.exists(AUTO_REPLY_FILE):
             with open(AUTO_REPLY_FILE, "r") as f:
                 auto_reply_users.update(set(json.load(f)))
-        if os.path.exists(CHAT_HISTORY_FILE):
-            with open(CHAT_HISTORY_FILE, "r") as f:
-                CHAT_HISTORY.update(json.load(f))
+        conn = sqlite3.connect("chat_history.db")
+        c = conn.cursor()
+        c.execute("SELECT user_id, history FROM chat_history")
+        CHAT_HISTORY.update({row[0]: json.loads(row[1]) for row in c.fetchall() if row[1] is not None})
+        conn.close()
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in chat history: {e}. Initializing empty history.")
+        CHAT_HISTORY.clear()
     except Exception as e:
-        logger.error(f"Error loading data: {e}")
+        logger.error(f"Error loading data: {e}. Initializing empty history.")
+        CHAT_HISTORY.clear()
 
 
-# Save auto-reply users and chat history to JSON files
+# Save auto-reply users and chat history to SQLite
 def save_data():
     try:
         with open(AUTO_REPLY_FILE, "w") as f:
             json.dump(list(auto_reply_users), f)
-        with open(CHAT_HISTORY_FILE, "w") as f:
-            json.dump(CHAT_HISTORY, f)
+        conn = sqlite3.connect("chat_history.db")
+        c = conn.cursor()
+        for user_id, history in CHAT_HISTORY.items():
+            c.execute("INSERT OR REPLACE INTO chat_history (user_id, history) VALUES (?, ?)",
+                      (user_id, json.dumps(history)))
+        conn.commit()
+        conn.close()
     except Exception as e:
         logger.error(f"Error saving data: {e}")
 
@@ -126,6 +157,7 @@ async def get_last_messages(user_id: int, limit: int = 10):
 async def startup_event():
     global started
     if not started:
+        init_db()  # Initialize database
         load_data()
         await client.connect()
         if not await client.is_user_authorized():
@@ -166,7 +198,7 @@ async def gpt_message_form(request: Request):
         "messages": [],
         "selected_user_ids": [],
         "preview_text": None,
-        "context_preview_text": None  # New field for context update preview
+        "context_preview_text": None
     })
 
 
@@ -374,8 +406,11 @@ async def preview_response(
         if not instruction.strip():
             raise ValueError("Please provide an instruction for ChatGPT.")
 
-        # Generate preview message (using the first target_id for context as a reference)
-        preview_text = await ask_chatgpt(target_ids[0], instruction, send_message=False)
+        # Generate preview message for each target_id and use the first for display
+        preview_texts = {}
+        for target_id in target_ids:
+            preview_texts[target_id] = await ask_chatgpt(target_id, instruction, send_message=False)
+        preview_text = preview_texts.get(target_ids[0], "No preview generated.")
 
         users = await get_dialog_user_list()
         return templates.TemplateResponse("index.html", {
@@ -424,8 +459,11 @@ async def update_context(
         if not instruction.strip():
             raise ValueError("Please provide an instruction for context update.")
 
-        # Generate context update response for the first target_id as a reference
-        context_preview_text = await ask_chatgpt(target_ids[0], instruction, send_message=False)
+        # Update context for each target_id and use the first for display
+        context_preview_texts = {}
+        for target_id in target_ids:
+            context_preview_texts[target_id] = await ask_chatgpt(target_id, instruction, send_message=False)
+        context_preview_text = context_preview_texts.get(target_ids[0], "No context update generated.")
 
         users = await get_dialog_user_list()
         return templates.TemplateResponse("index.html", {
