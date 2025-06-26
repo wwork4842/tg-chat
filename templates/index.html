@@ -105,7 +105,6 @@
             border-radius: 4px;
             max-height: 300px;
             overflow-y: auto;
-            display: {% if messages %}block{% else %}none{% endif %};
         }
         .message-history h3 {
             margin-top: 0;
@@ -117,6 +116,9 @@
             background-color: white;
             border: 1px solid #eee;
             border-radius: 4px;
+        }
+        .message-item:first-child {
+            border-left: 3px solid #007bff;
         }
         .message-sender {
             font-weight: bold;
@@ -193,7 +195,7 @@
 
             <div class="form-group">
                 <label for="instruction">Instruction to ChatGPT</label>
-                <textarea name="instruction" id="instruction" placeholder="Enter your instruction for ChatGPT..." required>{{ instruction if instruction is defined else "" }}</textarea>
+                <textarea name="instruction" id="instruction" placeholder="Enter your instruction for ChatGPT...">{{ instruction if instruction is defined else "" }}</textarea>
             </div>
 
             <div class="button-group">
@@ -237,18 +239,18 @@
 
         {% if messages %}
             <div class="message-history" id="message-history">
-                <h3>Last 10 Messages</h3>
+                <h3>Last 10 Messages (Newest First)</h3>
                 {% for message in messages %}
                     <div class="message-item">
-                        <div class="message-sender">{{ message.sender}}</div>
-                        <div class="message-timestamp">{{ message.timestamp}}</div>
-                        <div class="message-text">{{ message.text}}</div>
+                        <div class="message-sender">{{ message.sender }}</div>
+                        <div class="message-timestamp">{{ message.timestamp }}</div>
+                        <div class="message-text">{{ message.text }}</div>
                     </div>
                 {% endfor %}
             </div>
         {% else %}
             <div class="message-history" id="message-history" style="display: none;">
-                <h3>Last 10 Messages</h3>
+                <h3>Last 10 Messages (Newest First)</h3>
                 <!-- Placeholder -->
             </div>
         {% endif %}
@@ -270,9 +272,10 @@
         let lastCustomUserId = {{ custom_user_id | default('') | tojson }};
 
         function validateSendForm() {
-            const userIds = document.querySelectorAll('input[name="user_ids"]:checked');
-            const customUserId = document.getElementById('custom_user_id').value.trim();
-            const instruction = document.getElementById('instruction').value.trim();
+            const userIds = $('input[name="user_ids"]:checked').map((_, el) => el.value).get();
+            const customUserId = $('#custom_user_id').val().trim();
+            const instruction = $('#instruction').val().trim();
+            console.log('Send form validation:', { userIds, customUserId, instruction });
             if (userIds.length === 0 && !customUserId) {
                 alert('Please select at least one contact or enter a Telegram user ID.');
                 return false;
@@ -285,10 +288,10 @@
         }
 
         function validatePreviewForm() {
-            const userIds = document.querySelectorAll('input[name="user_ids"]:checked');
-            const customUserId = document.getElementById('custom_user_id').value.trim();
-            const instruction = document.getElementById('instruction').value.trim();
-            console.log('Preview clicked - userIds:', userIds, 'customUserId:', customUserId, 'instruction:', instruction);
+            const userIds = $('input[name="user_ids"]:checked').map((_, el) => el.value).get();
+            const customUserId = $('#custom_user_id').val().trim();
+            const instruction = $('#instruction').val().trim();
+            console.log('Preview form validation:', { userIds, customUserId, instruction });
             if (userIds.length === 0 && !customUserId) {
                 alert('Please select at least one contact or enter a Telegram user ID.');
                 return false;
@@ -301,10 +304,10 @@
         }
 
         function validateUpdateContextForm() {
-            const userIds = document.querySelectorAll('input[name="user_ids"]:checked');
-            const customUserId = document.getElementById('custom_user_id').value.trim();
-            const instruction = document.getElementById('instruction').value.trim();
-            console.log('Update Context clicked - userIds:', userIds, 'customUserId:', customUserId, 'instruction:', instruction);
+            const userIds = $('input[name="user_ids"]:checked').map((_, el) => el.value).get();
+            const customUserId = $('#custom_user_id').val().trim();
+            const instruction = $('#instruction').val().trim();
+            console.log('Update context form validation:', { userIds, customUserId, instruction });
             if (userIds.length === 0 && !customUserId) {
                 alert('Please select at least one contact or enter a Telegram user ID.');
                 return false;
@@ -317,10 +320,10 @@
         }
 
         function validateSendPreviewForm() {
-            const userIds = document.querySelectorAll('input[name="user_ids"]:checked');
-            const customUserId = document.getElementById('custom_user_id').value.trim();
-            const previewText = document.getElementById('editable_preview_text').value.trim();
-            console.log('Send Preview clicked - userIds:', userIds, 'customUserId:', customUserId, 'previewText:', previewText);
+            const userIds = $('input[name="user_ids"]:checked').map((_, el) => el.value).get();
+            const customUserId = $('#custom_user_id').val().trim();
+            const previewText = $('#editable_preview_text').val().trim();
+            console.log('Send preview form validation:', { userIds, customUserId, previewText });
             if (userIds.length === 0 && !customUserId) {
                 alert('Please select at least one contact or enter a Telegram user ID.');
                 return false;
@@ -335,59 +338,50 @@
         function sendPreviewManually() {
             if (validateSendPreviewForm()) {
                 const form = $('#send-preview-form');
-                const userIds = Array.from(document.querySelectorAll('input[name="user_ids"]:checked'))
-                    .map(input => input.value).join(',');
-                const customUserId = document.getElementById('custom_user_id').value.trim();
-                const previewText = document.getElementById('editable_preview_text').value.trim();
+                const userIds = $('input[name="user_ids"]:checked').map((_, el) => el.value).get().join(',');
+                const customUserId = $('#custom_user_id').val().trim();
+                const previewText = $('#editable_preview_text').val().trim();
 
-                form.find('#send_preview_user_ids').val(userIds);
-                form.find('#send_preview_custom_user_id').val(customUserId);
-                form.find('#send_preview_text').val(previewText);
+                $('#send_preview_user_ids').val(userIds);
+                $('#send_preview_custom_user_id').val(customUserId);
+                $('#send_preview_text').val(previewText);
 
-                console.log('Submitting preview form with:', {
-                    user_ids: userIds,
-                    custom_user_id: customUserId,
-                    preview_text: previewText
-                });
-
+                console.log('Submitting preview form:', { user_ids: userIds, custom_user_id: customUserId, preview_text: previewText });
                 form.submit();
             }
         }
 
         function viewHistory() {
-            const userIds = Array.from(document.querySelectorAll('input[name="user_ids"]:checked'))
-                .map(input => input.value);
-            const customUserId = document.getElementById('custom_user_id').value.trim();
+            const userIds = $('input[name="user_ids"]:checked').map((_, el) => el.value).get();
+            const customUserId = $('#custom_user_id').val().trim();
 
             if (userIds.length === 0 && !customUserId) {
                 alert('Please select at least one contact or enter a Telegram user ID.');
                 return;
             }
 
-            // Check if user selection has changed
-            const userIdsChanged = JSON.stringify(userIds) !== JSON.stringify(lastUserIds) ||
-                                  customUserId !== lastCustomUserId;
-
+            const userIdsChanged = JSON.stringify(userIds) !== JSON.stringify(lastUserIds) || customUserId !== lastCustomUserId;
             if (userIdsChanged) {
                 lastUserIds = userIds;
                 lastCustomUserId = customUserId;
-                document.getElementById('history_user_ids').value = userIds.join(',');
-                document.getElementById('history_custom_user_id').value = customUserId;
-                document.getElementById('history-form').submit();
+                $('#history_user_ids').val(userIds.join(','));
+                $('#history_custom_user_id').val(customUserId);
+                console.log('Submitting history form:', { user_ids: userIds, custom_user_id: customUserId });
+                $('#history-form').submit();
             }
         }
 
         function submitToggleForm() {
-            const userIds = Array.from(document.querySelectorAll('input[name="user_ids"]:checked'))
-                .map(input => input.value);
-            const customUserId = document.getElementById('custom_user_id').value.trim();
+            const userIds = $('input[name="user_ids"]:checked').map((_, el) => el.value).get();
+            const customUserId = $('#custom_user_id').val().trim();
             if (userIds.length === 0 && !customUserId) {
                 alert('Please select at least one contact or enter a Telegram user ID.');
                 return;
             }
-            document.getElementById('toggle_user_ids').value = userIds.join(',');
-            document.getElementById('toggle_custom_user_id').value = customUserId;
-            document.getElementById('toggle-form').submit();
+            $('#toggle_user_ids').val(userIds.join(','));
+            $('#toggle_custom_user_id').val(customUserId);
+            console.log('Submitting toggle form:', { user_ids: userIds, custom_user_id: customUserId });
+            $('#toggle-form').submit();
         }
     </script>
 </body>
