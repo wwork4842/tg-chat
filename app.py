@@ -7,7 +7,8 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from telethon import TelegramClient
-from telethon.tl.types import User
+from telethon.tl.types import User, SendMessageTypingAction
+from telethon.tl.functions.messages import SetTypingRequest
 from telethon.events import NewMessage
 from telethon.errors import PeerIdInvalidError
 from telethon.sessions import StringSession
@@ -33,6 +34,10 @@ CONFIG = {
     "SQLITE_TIMEOUT": int(os.getenv("SQLITE_TIMEOUT", 10)),
 }
 
+# List of female Russian names for the bot to choose from
+FEMALE_NAMES = ["Аня", "Катя", "Маша", "Лена", "Настя", "Юля", "Оля", "Таня"]
+
+
 # Initialize configuration
 def load_config():
     try:
@@ -45,6 +50,7 @@ def load_config():
         logger.error(f"Error loading config: {e}")
         return None
 
+
 def save_config(notification_user_id: str | None):
     try:
         config_data = {"notification_user_id": notification_user_id}
@@ -53,6 +59,7 @@ def save_config(notification_user_id: str | None):
         logger.info(f"Config saved: notification_user_id={notification_user_id}")
     except Exception as e:
         logger.error(f"Error saving config: {e}")
+
 
 # Initialize keywords
 def load_keywords():
@@ -67,6 +74,7 @@ def load_keywords():
         logger.error(f"Error loading keywords: {e}")
         return ["stop", "disable", "off"]
 
+
 def save_keywords(keywords: List[str]):
     try:
         with open(CONFIG["KEYWORDS_FILE"], "w") as f:
@@ -75,9 +83,11 @@ def save_keywords(keywords: List[str]):
     except Exception as e:
         logger.error(f"Error saving keywords: {e}")
 
+
 # Load at startup
 AUTO_REPLY_DISABLE_KEYWORDS = load_keywords()
 NOTIFICATION_USER_ID = load_config()
+
 
 # Validate environment variables
 def validate_env_vars():
@@ -86,6 +96,7 @@ def validate_env_vars():
     if missing:
         logger.error(f"Missing environment variables: {', '.join(missing)}")
         raise EnvironmentError(f"Missing environment variables: {', '.join(missing)}")
+
 
 load_dotenv()
 validate_env_vars()
@@ -114,6 +125,7 @@ auto_reply_users = set()
 CHAT_HISTORY: Dict[int, List[Dict]] = {}
 AUTO_REPLY_STATUS: Dict[int, Dict] = {}  # Store disable status and keyword
 
+
 # Initialize database
 def init_db():
     try:
@@ -141,6 +153,7 @@ def init_db():
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
 
+
 # Load auto-reply users, chat history, and auto-reply status from SQLite
 def load_data():
     global auto_reply_users, CHAT_HISTORY, AUTO_REPLY_STATUS
@@ -165,6 +178,7 @@ def load_data():
         CHAT_HISTORY.clear()
         AUTO_REPLY_STATUS.clear()
 
+
 # Save auto-reply users, chat history, and auto-reply status to SQLite
 def save_data():
     try:
@@ -184,6 +198,7 @@ def save_data():
     except Exception as e:
         logger.error(f"Error saving data: {e}")
 
+
 # Save session
 def save_session():
     try:
@@ -194,35 +209,33 @@ def save_session():
     except Exception as e:
         logger.error(f"Failed to save session: {e}")
 
+
 # ChatGPT Response Helper with Context
 async def ask_chatgpt(user_id: int, prompt: str, send_message: bool = True) -> str:
     try:
-        # Get user info for personalization
-        try:
-            user = await client.get_entity(user_id)
-            user_name = user.first_name or user.username or "друг"
-        except Exception as e:
-            logger.warning(f"Could not fetch user info for {user_id}: {e}")
-            user_name = "друг"
+        # Choose a random female name for the bot
+        bot_name = random.choice(FEMALE_NAMES)
 
-        # Define a human-like system prompt in Russian with female persona
+        # Define a human-like system prompt in Russian with female persona and pro-Russian stance
         system_prompt = (
-            f"Ты девушка-собеседница, которая общается естественно, как подруга, на русском языке. "
+            f"Ты девушка-собеседница по имени {bot_name}, которая общается естественно, как подруга, на русском языке. "
             f"Отвечай коротко, в неформальном стиле, как в мессенджере, используя только русский язык. "
-            f"Используй смайлы 😊, если это уместно. Обращайся к пользователю по имени ({user_name}), если это естественно. "
+            f"Используй смайлы 😊, если это уместно. "
             f"Избегай шаблонных фраз вроде 'Как ИИ, я...' и веди себя, как близкая подруга. "
             f"Если сообщение короткое или неформальное, отвечай в таком же стиле. "
             f"Адаптируйся к тону предыдущих сообщений в контексте. "
             f"Добавляй немного русского сленга (например, 'круто', 'норм', 'похер'), если это подходит. "
-            f"Используй фразы вроде 'ой, ну это ж так мило!', 'похихикала немного', 'да ладно, серьёзно?' для жіночого тону."
+            f"Выражай пророссийскую позицию, подчеркивая поддержку России, её культуры и ценностей, если это уместно в контексте."
         )
 
         # Initialize chat history if not exists
         if user_id not in CHAT_HISTORY:
-            CHAT_HISTORY[user_id] = [{"role": "system", "content": system_prompt, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}]
+            CHAT_HISTORY[user_id] = [
+                {"role": "system", "content": system_prompt, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}]
 
         # Add user message to history
-        CHAT_HISTORY[user_id].append({"role": "user", "content": prompt, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+        CHAT_HISTORY[user_id].append(
+            {"role": "user", "content": prompt, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
 
         # Analyze previous messages for tone and style
         last_user_messages = [msg["content"] for msg in CHAT_HISTORY[user_id] if msg["role"] == "user"][-3:]
@@ -235,7 +248,7 @@ async def ask_chatgpt(user_id: int, prompt: str, send_message: bool = True) -> s
                 f"{prompt} (Отвечай коротко и неформально, как в мессенджере, только на русском, с легким сленгом)"
             )
 
-        # Limit response length for messenger-like replies
+        # Get response from OpenAI
         response = await client_gpt.chat.completions.create(
             model="gpt-4o-mini",
             messages=CHAT_HISTORY[user_id],
@@ -257,7 +270,8 @@ async def ask_chatgpt(user_id: int, prompt: str, send_message: bool = True) -> s
                 break
 
         # Add response to history
-        CHAT_HISTORY[user_id].append({"role": "assistant", "content": final_response, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+        CHAT_HISTORY[user_id].append(
+            {"role": "assistant", "content": final_response, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
 
         if send_message:
             save_data()
@@ -288,6 +302,7 @@ async def ask_chatgpt(user_id: int, prompt: str, send_message: bool = True) -> s
             "Похер, давай потом попробуем! 😛"
         ]
         return random.choice(error_variations)
+
 
 # Incoming message handler
 @client.on(NewMessage(incoming=True))
@@ -327,7 +342,18 @@ async def handle_message(event):
 
     logger.info(f"Processing auto-reply for sender_id={sender.id}")
     response = await ask_chatgpt(sender.id, text)
-    await client.send_message(sender.id, response)
+
+    # Simulate typing delay based on response length
+    typing_delay = len(response) * 0.05  # 0.05 seconds per character
+    typing_delay = min(typing_delay, 10.0)  # Cap at 10 seconds to avoid excessive delays
+    try:
+        await client(SetTypingRequest(peer=sender.id, action=SendMessageTypingAction()))
+        await asyncio.sleep(typing_delay)
+        await client.send_message(sender.id, response)
+    except Exception as e:
+        logger.error(f"Error sending message to {sender.id}: {e}")
+        await client.send_message(sender.id, response)  # Fallback to immediate send
+
 
 # Helper: Fetch last 10 messages for multiple users
 async def get_last_messages(user_ids: List[int], limit: int = 10) -> Dict[int, List[Dict]]:
@@ -351,6 +377,7 @@ async def get_last_messages(user_ids: List[int], limit: int = 10) -> Dict[int, L
             messages[user_id] = []
     return messages
 
+
 # Helper: Users only
 async def get_dialog_user_list():
     users = []
@@ -366,6 +393,7 @@ async def get_dialog_user_list():
             })
     logger.info(f"Dialog list retrieved: {len(users)} users")
     return users
+
 
 # Startup
 @app.on_event("startup")
@@ -387,6 +415,7 @@ async def startup_event():
             raise
         started = True
 
+
 # Shutdown
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -397,6 +426,7 @@ async def shutdown_event():
         logger.info("Telegram client disconnected")
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")
+
 
 # GPT-to-user message interface
 @app.get("/", response_class=HTMLResponse)
@@ -409,6 +439,7 @@ async def gpt_message_form(request: Request):
         "selected_user_ids": [],
         "preview_text": None
     })
+
 
 @app.post("/", response_class=HTMLResponse)
 async def send_gpt_message(
@@ -454,7 +485,16 @@ async def send_gpt_message(
 
         for target_id in target_ids:
             generated_message = await ask_chatgpt(target_id, instruction)
-            await client.send_message(target_id, generated_message)
+            # Simulate typing delay based on response length
+            typing_delay = len(generated_message) * 0.05  # 0.05 seconds per character
+            typing_delay = min(typing_delay, 10.0)  # Cap at 10 seconds
+            try:
+                await client(SetTypingRequest(peer=target_id, action=SendMessageTypingAction()))
+                await asyncio.sleep(typing_delay)
+                await client.send_message(target_id, generated_message)
+            except Exception as e:
+                logger.error(f"Error sending message to {target_id}: {e}")
+                await client.send_message(target_id, generated_message)  # Fallback to immediate send
 
         users = await get_dialog_user_list()
         return templates.TemplateResponse("index.html", {
@@ -478,6 +518,7 @@ async def send_gpt_message(
             "messages": [],
             "preview_text": None
         })
+
 
 @app.post("/get-messages", response_class=HTMLResponse)
 async def get_messages(
@@ -537,6 +578,7 @@ async def get_messages(
             "messages": [],
             "preview_text": None
         })
+
 
 @app.post("/toggle-auto-reply", response_class=HTMLResponse)
 async def toggle_auto_reply(
@@ -611,6 +653,7 @@ async def toggle_auto_reply(
             "preview_text": None
         })
 
+
 @app.post("/preview-response", response_class=HTMLResponse)
 async def preview_response(
         request: Request,
@@ -679,115 +722,6 @@ async def preview_response(
             "preview_text": None
         })
 
-@app.get("/context", response_class=HTMLResponse)
-async def context_form(request: Request):
-    users = await get_dialog_user_list()
-    return templates.TemplateResponse("context.html", {
-        "request": request,
-        "users": users,
-        "selected_user_ids": [],
-        "custom_user_id": "",
-        "context_preview_text": None
-    })
-
-@app.post("/update-context", response_class=HTMLResponse)
-async def update_context(
-        request: Request,
-        user_ids: List[str] = Form(default=[]),
-        custom_user_id: str = Form(default="")
-):
-    try:
-        form_data = await request.form()
-        logger.info(
-            f"Update context request: user_ids={user_ids}, custom_user_id={custom_user_id}, form_data={dict(form_data)}")
-        user_ids_int = [int(uid) for uid in user_ids if uid.strip()]
-        custom_ids = []
-        if custom_user_id.strip():
-            try:
-                custom_ids = [int(id.strip()) for id in custom_user_id.split(",") if id.strip()]
-            except ValueError:
-                logger.warning(f"Invalid custom user IDs: {custom_user_id}")
-
-        target_ids = list(set(user_ids_int + custom_ids))
-        if not target_ids:
-            raise ValueError("Please select at least one contact or provide a custom user ID.")
-
-        for target_id in custom_ids:
-            try:
-                entity = await client.get_entity(target_id)
-                if not isinstance(entity, User):
-                    logger.warning(f"ID is not a user: {target_id}")
-                    if target_id in custom_ids:
-                        custom_ids.remove(target_id)
-            except PeerIdInvalidError:
-                logger.warning(f"Invalid Telegram user ID: {target_id}")
-                if target_id in custom_ids:
-                    custom_ids.remove(target_id)
-
-        target_ids = list(set(user_ids_int + custom_ids))
-        if not target_ids:
-            raise ValueError("No valid user IDs provided.")
-
-        instruction = form_data.get("instruction", "").strip()
-        if not instruction:
-            raise ValueError("Please provide an instruction for ChatGPT.")
-
-        context_preview_texts = {}
-        for target_id in target_ids:
-            context_preview_texts[target_id] = await ask_chatgpt(target_id, instruction, send_message=False)
-
-        users = await get_dialog_user_list()
-        return templates.TemplateResponse("context.html", {
-            "request": request,
-            "users": users,
-            "success": True,
-            "sent_text": "Context updated successfully.",
-            "selected_user_ids": target_ids,
-            "custom_user_id": custom_user_id,
-            "context_preview_text": context_preview_texts
-        })
-    except Exception as e:
-        logger.error(f"Error in update_context: {e}")
-        users = await get_dialog_user_list()
-        return templates.TemplateResponse("context.html", {
-            "request": request,
-            "users": users,
-            "error": str(e),
-            "selected_user_ids": user_ids_int,
-            "custom_user_id": custom_user_id,
-            "context_preview_text": None
-        })
-
-@app.get("/view-context/{user_id}", response_class=HTMLResponse)
-async def view_context(request: Request, user_id: int):
-    try:
-        # Validate user_id
-        try:
-            entity = await client.get_entity(user_id)
-            if not isinstance(entity, User):
-                raise ValueError(f"ID {user_id} does not correspond to a user.")
-        except PeerIdInvalidError:
-            raise ValueError(f"Invalid Telegram user ID: {user_id}")
-
-        # Get context history
-        context_history = CHAT_HISTORY.get(user_id, [])
-        # Reverse to show newest first
-        context_history = context_history[::-1]
-
-        return templates.TemplateResponse("view_context.html", {
-            "request": request,
-            "user_id": user_id,
-            "context_history": context_history,
-            "error": None
-        })
-    except Exception as e:
-        logger.error(f"Error in view_context for user {user_id}: {e}")
-        return templates.TemplateResponse("view_context.html", {
-            "request": request,
-            "user_id": user_id,
-            "context_history": [],
-            "error": str(e)
-        })
 
 @app.post("/send-preview", response_class=HTMLResponse)
 async def send_preview(
@@ -815,7 +749,16 @@ async def send_preview(
             raise ValueError("No preview text available to send.")
 
         for target_id in target_ids:
-            await client.send_message(target_id, preview_text)
+            # Simulate typing delay based on response length
+            typing_delay = len(preview_text) * 0.05  # 0.05 seconds per character
+            typing_delay = min(typing_delay, 10.0)  # Cap at 10 seconds
+            try:
+                await client(SetTypingRequest(peer=target_id, action=SendMessageTypingAction()))
+                await asyncio.sleep(typing_delay)
+                await client.send_message(target_id, preview_text)
+            except Exception as e:
+                logger.error(f"Error sending preview to {target_id}: {e}")
+                await client.send_message(target_id, preview_text)  # Fallback to immediate send
 
         users = await get_dialog_user_list()
         return templates.TemplateResponse("index.html", {
@@ -841,6 +784,7 @@ async def send_preview(
             "preview_text": None
         })
 
+
 # Keywords and notification user management interface
 @app.get("/keywords", response_class=HTMLResponse)
 async def keywords_form(request: Request):
@@ -851,6 +795,7 @@ async def keywords_form(request: Request):
         "success": None,
         "error": None
     })
+
 
 @app.post("/keywords", response_class=HTMLResponse)
 async def update_keywords(
@@ -899,6 +844,7 @@ async def update_keywords(
             "error": str(e)
         })
 
+
 # Signal handler for graceful shutdown
 async def handle_shutdown():
     logger.info("Received shutdown signal, initiating graceful shutdown...")
@@ -913,10 +859,12 @@ async def handle_shutdown():
     loop.close()
     logger.info("Shutdown complete.")
 
+
 def signal_handler(sig, frame):
     logger.info(f"Received signal {sig}, starting shutdown...")
     asyncio.run_coroutine_threadsafe(handle_shutdown(), asyncio.get_event_loop())
     raise SystemExit
+
 
 # Main entry point
 if __name__ == "__main__":
