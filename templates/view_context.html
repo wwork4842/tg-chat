@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>View ChatGPT Context</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .context-history {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 4px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .context-history h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        .context-item {
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: white;
+            border: 1px solid #eee;
+            border-radius: 4px;
+        }
+        .context-item.user {
+            border-left: 3px solid #007bff;
+        }
+        .context-item.assistant {
+            border-left: 3px solid #28a745;
+        }
+        .context-role {
+            font-weight: bold;
+            color: #007bff;
+        }
+        .context-timestamp {
+            font-size: 0.8em;
+            color: #666;
+        }
+        .context-text {
+            margin-top: 5px;
+            word-break: break-word;
+        }
+        .message {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .back-link {
+            display: inline-block;
+            margin-top: 15px;
+            color: #007bff;
+            text-decoration: none;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>View ChatGPT Context for User ID: {{ user_id }}</h1>
+        {% if context_history %}
+            <div class="context-history">
+                <h3>Context History (Newest First)</h3>
+                {% for message in context_history %}
+                    <div class="context-item {{ message.role }}">
+                        <div class="context-role">{{ message.role | capitalize }}</div>
+                        <div class="context-timestamp">{{ message.timestamp }}</div>
+                        <div class="context-text">{{ message.content }}</div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="context-history">
+                <h3>Context History</h3>
+                <p>No context available for this user.</p>
+            </div>
+        {% endif %}
+
+        {% if error %}
+            <div class="message error">
+                <strong>Error:</strong> {{ error }}
+            </div>
+        {% endif %}
+
+        <a href="/context" class="back-link">Back to Update Context</a>
+    </div>
+</body>
+</html>

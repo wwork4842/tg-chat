@@ -2,6 +2,7 @@ import os
 import json
 import signal
 import asyncio
+import random
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -32,7 +33,6 @@ CONFIG = {
     "SQLITE_TIMEOUT": int(os.getenv("SQLITE_TIMEOUT", 10)),
 }
 
-
 # Initialize configuration
 def load_config():
     try:
@@ -45,7 +45,6 @@ def load_config():
         logger.error(f"Error loading config: {e}")
         return None
 
-
 def save_config(notification_user_id: str | None):
     try:
         config_data = {"notification_user_id": notification_user_id}
@@ -54,7 +53,6 @@ def save_config(notification_user_id: str | None):
         logger.info(f"Config saved: notification_user_id={notification_user_id}")
     except Exception as e:
         logger.error(f"Error saving config: {e}")
-
 
 # Initialize keywords
 def load_keywords():
@@ -69,7 +67,6 @@ def load_keywords():
         logger.error(f"Error loading keywords: {e}")
         return ["stop", "disable", "off"]
 
-
 def save_keywords(keywords: List[str]):
     try:
         with open(CONFIG["KEYWORDS_FILE"], "w") as f:
@@ -78,11 +75,9 @@ def save_keywords(keywords: List[str]):
     except Exception as e:
         logger.error(f"Error saving keywords: {e}")
 
-
 # Load at startup
 AUTO_REPLY_DISABLE_KEYWORDS = load_keywords()
 NOTIFICATION_USER_ID = load_config()
-
 
 # Validate environment variables
 def validate_env_vars():
@@ -91,7 +86,6 @@ def validate_env_vars():
     if missing:
         logger.error(f"Missing environment variables: {', '.join(missing)}")
         raise EnvironmentError(f"Missing environment variables: {', '.join(missing)}")
-
 
 load_dotenv()
 validate_env_vars()
@@ -120,7 +114,6 @@ auto_reply_users = set()
 CHAT_HISTORY: Dict[int, List[Dict]] = {}
 AUTO_REPLY_STATUS: Dict[int, Dict] = {}  # Store disable status and keyword
 
-
 # Initialize database
 def init_db():
     try:
@@ -148,7 +141,6 @@ def init_db():
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
 
-
 # Load auto-reply users, chat history, and auto-reply status from SQLite
 def load_data():
     global auto_reply_users, CHAT_HISTORY, AUTO_REPLY_STATUS
@@ -173,7 +165,6 @@ def load_data():
         CHAT_HISTORY.clear()
         AUTO_REPLY_STATUS.clear()
 
-
 # Save auto-reply users, chat history, and auto-reply status to SQLite
 def save_data():
     try:
@@ -193,7 +184,6 @@ def save_data():
     except Exception as e:
         logger.error(f"Error saving data: {e}")
 
-
 # Save session
 def save_session():
     try:
@@ -204,26 +194,100 @@ def save_session():
     except Exception as e:
         logger.error(f"Failed to save session: {e}")
 
-
 # ChatGPT Response Helper with Context
 async def ask_chatgpt(user_id: int, prompt: str, send_message: bool = True) -> str:
     try:
+        # Get user info for personalization
+        try:
+            user = await client.get_entity(user_id)
+            user_name = user.first_name or user.username or "друг"
+        except Exception as e:
+            logger.warning(f"Could not fetch user info for {user_id}: {e}")
+            user_name = "друг"
+
+        # Define a human-like system prompt in Russian with female persona
+        system_prompt = (
+            f"Ты девушка-собеседница, которая общается естественно, как подруга, на русском языке. "
+            f"Отвечай коротко, в неформальном стиле, как в мессенджере, используя только русский язык. "
+            f"Используй смайлы 😊, если это уместно. Обращайся к пользователю по имени ({user_name}), если это естественно. "
+            f"Избегай шаблонных фраз вроде 'Как ИИ, я...' и веди себя, как близкая подруга. "
+            f"Если сообщение короткое или неформальное, отвечай в таком же стиле. "
+            f"Адаптируйся к тону предыдущих сообщений в контексте. "
+            f"Добавляй немного русского сленга (например, 'круто', 'норм', 'похер'), если это подходит. "
+            f"Используй фразы вроде 'ой, ну это ж так мило!', 'похихикала немного', 'да ладно, серьёзно?' для жіночого тону."
+        )
+
+        # Initialize chat history if not exists
         if user_id not in CHAT_HISTORY:
-            CHAT_HISTORY[user_id] = [{"role": "system", "content": "You are a helpful assistant."}]
-        CHAT_HISTORY[user_id].append({"role": "user", "content": prompt})
+            CHAT_HISTORY[user_id] = [{"role": "system", "content": system_prompt, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}]
+
+        # Add user message to history
+        CHAT_HISTORY[user_id].append({"role": "user", "content": prompt, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+
+        # Analyze previous messages for tone and style
+        last_user_messages = [msg["content"] for msg in CHAT_HISTORY[user_id] if msg["role"] == "user"][-3:]
+        is_short_message = len(prompt) < 50  # Consider messages < 50 chars as short
+        is_informal = any(word in prompt.lower() for word in ["привет", "ку", "ок", "😊", "😉", "норм"])
+
+        # Adjust prompt for short/informal messages
+        if is_short_message or is_informal:
+            CHAT_HISTORY[user_id][-1]["content"] = (
+                f"{prompt} (Отвечай коротко и неформально, как в мессенджере, только на русском, с легким сленгом)"
+            )
+
+        # Limit response length for messenger-like replies
         response = await client_gpt.chat.completions.create(
             model="gpt-4o-mini",
-            messages=CHAT_HISTORY[user_id]
+            messages=CHAT_HISTORY[user_id],
+            max_tokens=150 if is_short_message else 500
         )
         response_content = response.choices[0].message.content
-        CHAT_HISTORY[user_id].append({"role": "assistant", "content": response_content})
+
+        # Add mood-based emojis
+        mood_map = {
+            "грустно": " 😔",
+            "рад": " 😊",
+            "ок": " 👍",
+            "круто": " 😎"
+        }
+        final_response = response_content
+        for mood, emoji in mood_map.items():
+            if mood in prompt.lower():
+                final_response += emoji
+                break
+
+        # Add response to history
+        CHAT_HISTORY[user_id].append({"role": "assistant", "content": final_response, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+
         if send_message:
             save_data()
-        return response_content
+        return final_response
     except Exception as e:
-        logger.error(f"OpenAI error for user {user_id}: {e}")
-        return "Sorry, I couldn't generate a reply right now."
-
+        logger.error(f"OpenAI error for user {user_id}: {e.__class__.__name__}: {str(e)}")
+        # Disable auto-reply for this user
+        if user_id in auto_reply_users:
+            auto_reply_users.discard(user_id)
+            AUTO_REPLY_STATUS[user_id] = {"disabled_by_keyword": "error"}
+            save_data()
+            # Notify NOTIFICATION_USER_ID
+            if NOTIFICATION_USER_ID:
+                try:
+                    await client.send_message(
+                        int(NOTIFICATION_USER_ID),
+                        f"Автоответ отключен для пользователя {user_id} из-за ошибки OpenAI: {str(e)}"
+                    )
+                except (ValueError, PeerIdInvalidError):
+                    logger.error(f"Invalid notification user ID: {NOTIFICATION_USER_ID}")
+                except Exception as notify_e:
+                    logger.error(f"Error sending notification to {NOTIFICATION_USER_ID}: {notify_e}")
+        # Return random error message without user name
+        error_variations = [
+            "Нету времени, давай позже? 😎",
+            "Сорри, занят щас, напиши позже! 😉",
+            "Ох, что-то не срослось, давай попозже? 😅",
+            "Похер, давай потом попробуем! 😛"
+        ]
+        return random.choice(error_variations)
 
 # Incoming message handler
 @client.on(NewMessage(incoming=True))
@@ -249,7 +313,7 @@ async def handle_message(event):
                     try:
                         await client.send_message(
                             int(NOTIFICATION_USER_ID),
-                            f"Auto-reply disabled for chat with @{sender_username} (ID: {sender.id}) due to keyword: {keyword}"
+                            f"Автоответ отключен для чата с @{sender_username} (ID: {sender.id}) из-за ключевого слова: {keyword}"
                         )
                     except (ValueError, PeerIdInvalidError):
                         logger.error(f"Invalid notification user ID: {NOTIFICATION_USER_ID}")
@@ -264,7 +328,6 @@ async def handle_message(event):
     logger.info(f"Processing auto-reply for sender_id={sender.id}")
     response = await ask_chatgpt(sender.id, text)
     await client.send_message(sender.id, response)
-
 
 # Helper: Fetch last 10 messages for multiple users
 async def get_last_messages(user_ids: List[int], limit: int = 10) -> Dict[int, List[Dict]]:
@@ -288,7 +351,6 @@ async def get_last_messages(user_ids: List[int], limit: int = 10) -> Dict[int, L
             messages[user_id] = []
     return messages
 
-
 # Helper: Users only
 async def get_dialog_user_list():
     users = []
@@ -304,7 +366,6 @@ async def get_dialog_user_list():
             })
     logger.info(f"Dialog list retrieved: {len(users)} users")
     return users
-
 
 # Startup
 @app.on_event("startup")
@@ -326,7 +387,6 @@ async def startup_event():
             raise
         started = True
 
-
 # Shutdown
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -338,7 +398,6 @@ async def shutdown_event():
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")
 
-
 # GPT-to-user message interface
 @app.get("/", response_class=HTMLResponse)
 async def gpt_message_form(request: Request):
@@ -348,10 +407,8 @@ async def gpt_message_form(request: Request):
         "users": users,
         "messages": [],
         "selected_user_ids": [],
-        "preview_text": None,
-        "context_preview_text": None
+        "preview_text": None
     })
-
 
 @app.post("/", response_class=HTMLResponse)
 async def send_gpt_message(
@@ -408,8 +465,7 @@ async def send_gpt_message(
             "selected_user_ids": target_ids,
             "custom_user_id": custom_user_id,
             "messages": [],
-            "preview_text": None,
-            "context_preview_text": None
+            "preview_text": None
         })
     except Exception as e:
         users = await get_dialog_user_list()
@@ -420,10 +476,8 @@ async def send_gpt_message(
             "selected_user_ids": user_ids_int,
             "custom_user_id": custom_user_id,
             "messages": [],
-            "preview_text": None,
-            "context_preview_text": None
+            "preview_text": None
         })
-
 
 @app.post("/get-messages", response_class=HTMLResponse)
 async def get_messages(
@@ -470,8 +524,7 @@ async def get_messages(
             "selected_user_ids": target_ids,
             "custom_user_id": custom_user_id,
             "messages": messages,
-            "preview_text": None,
-            "context_preview_text": None
+            "preview_text": None
         })
     except Exception as e:
         users = await get_dialog_user_list()
@@ -482,10 +535,8 @@ async def get_messages(
             "selected_user_ids": user_ids_int,
             "custom_user_id": custom_user_id,
             "messages": [],
-            "preview_text": None,
-            "context_preview_text": None
+            "preview_text": None
         })
-
 
 @app.post("/toggle-auto-reply", response_class=HTMLResponse)
 async def toggle_auto_reply(
@@ -545,8 +596,7 @@ async def toggle_auto_reply(
             "selected_user_ids": target_ids,
             "custom_user_id": custom_user_id,
             "messages": [],
-            "preview_text": None,
-            "context_preview_text": None
+            "preview_text": None
         })
     except Exception as e:
         logger.error(f"Error in toggle_auto_reply: {e}")
@@ -558,10 +608,8 @@ async def toggle_auto_reply(
             "selected_user_ids": user_ids_int,
             "custom_user_id": custom_user_id,
             "messages": [],
-            "preview_text": None,
-            "context_preview_text": None
+            "preview_text": None
         })
-
 
 @app.post("/preview-response", response_class=HTMLResponse)
 async def preview_response(
@@ -616,8 +664,7 @@ async def preview_response(
             "selected_user_ids": target_ids,
             "custom_user_id": custom_user_id,
             "messages": [],
-            "preview_text": preview_texts,
-            "context_preview_text": None
+            "preview_text": preview_texts
         })
     except Exception as e:
         logger.error(f"Error in preview_response: {e}")
@@ -629,10 +676,19 @@ async def preview_response(
             "selected_user_ids": user_ids_int,
             "custom_user_id": custom_user_id,
             "messages": [],
-            "preview_text": None,
-            "context_preview_text": None
+            "preview_text": None
         })
 
+@app.get("/context", response_class=HTMLResponse)
+async def context_form(request: Request):
+    users = await get_dialog_user_list()
+    return templates.TemplateResponse("context.html", {
+        "request": request,
+        "users": users,
+        "selected_user_ids": [],
+        "custom_user_id": "",
+        "context_preview_text": None
+    })
 
 @app.post("/update-context", response_class=HTMLResponse)
 async def update_context(
@@ -674,36 +730,64 @@ async def update_context(
 
         instruction = form_data.get("instruction", "").strip()
         if not instruction:
-            raise ValueError("Please provide an instruction for context update.")
+            raise ValueError("Please provide an instruction for ChatGPT.")
 
         context_preview_texts = {}
         for target_id in target_ids:
             context_preview_texts[target_id] = await ask_chatgpt(target_id, instruction, send_message=False)
 
         users = await get_dialog_user_list()
-        return templates.TemplateResponse("index.html", {
+        return templates.TemplateResponse("context.html", {
             "request": request,
             "users": users,
+            "success": True,
+            "sent_text": "Context updated successfully.",
             "selected_user_ids": target_ids,
             "custom_user_id": custom_user_id,
-            "messages": [],
-            "preview_text": None,
             "context_preview_text": context_preview_texts
         })
     except Exception as e:
         logger.error(f"Error in update_context: {e}")
         users = await get_dialog_user_list()
-        return templates.TemplateResponse("index.html", {
+        return templates.TemplateResponse("context.html", {
             "request": request,
             "users": users,
             "error": str(e),
             "selected_user_ids": user_ids_int,
             "custom_user_id": custom_user_id,
-            "messages": [],
-            "preview_text": None,
             "context_preview_text": None
         })
 
+@app.get("/view-context/{user_id}", response_class=HTMLResponse)
+async def view_context(request: Request, user_id: int):
+    try:
+        # Validate user_id
+        try:
+            entity = await client.get_entity(user_id)
+            if not isinstance(entity, User):
+                raise ValueError(f"ID {user_id} does not correspond to a user.")
+        except PeerIdInvalidError:
+            raise ValueError(f"Invalid Telegram user ID: {user_id}")
+
+        # Get context history
+        context_history = CHAT_HISTORY.get(user_id, [])
+        # Reverse to show newest first
+        context_history = context_history[::-1]
+
+        return templates.TemplateResponse("view_context.html", {
+            "request": request,
+            "user_id": user_id,
+            "context_history": context_history,
+            "error": None
+        })
+    except Exception as e:
+        logger.error(f"Error in view_context for user {user_id}: {e}")
+        return templates.TemplateResponse("view_context.html", {
+            "request": request,
+            "user_id": user_id,
+            "context_history": [],
+            "error": str(e)
+        })
 
 @app.post("/send-preview", response_class=HTMLResponse)
 async def send_preview(
@@ -742,8 +826,7 @@ async def send_preview(
             "selected_user_ids": target_ids,
             "custom_user_id": custom_user_id,
             "messages": [],
-            "preview_text": None,
-            "context_preview_text": None
+            "preview_text": None
         })
     except Exception as e:
         logger.error(f"Error in send_preview: {e}")
@@ -755,10 +838,8 @@ async def send_preview(
             "selected_user_ids": user_ids_int,
             "custom_user_id": custom_user_id,
             "messages": [],
-            "preview_text": None,
-            "context_preview_text": None
+            "preview_text": None
         })
-
 
 # Keywords and notification user management interface
 @app.get("/keywords", response_class=HTMLResponse)
@@ -770,7 +851,6 @@ async def keywords_form(request: Request):
         "success": None,
         "error": None
     })
-
 
 @app.post("/keywords", response_class=HTMLResponse)
 async def update_keywords(
@@ -819,7 +899,6 @@ async def update_keywords(
             "error": str(e)
         })
 
-
 # Signal handler for graceful shutdown
 async def handle_shutdown():
     logger.info("Received shutdown signal, initiating graceful shutdown...")
@@ -834,12 +913,10 @@ async def handle_shutdown():
     loop.close()
     logger.info("Shutdown complete.")
 
-
 def signal_handler(sig, frame):
     logger.info(f"Received signal {sig}, starting shutdown...")
     asyncio.run_coroutine_threadsafe(handle_shutdown(), asyncio.get_event_loop())
     raise SystemExit
-
 
 # Main entry point
 if __name__ == "__main__":

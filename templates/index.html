@@ -151,22 +151,9 @@
             background-color: #f0f0f0;
             border-radius: 4px;
             border: 1px solid #ddd;
-            display: {% if preview_text or context_preview_text %}block{% else %}none{% endif %};
+            display: {% if preview_text %}block{% else %}none{% endif %};
         }
         .preview-textarea {
-            width: 100%;
-            min-height: 100px;
-            resize: vertical;
-        }
-        .context-area {
-            margin-top: 15px;
-            padding: 10px;
-            background-color: #e0e0e0;
-            border-radius: 4px;
-            border: 1px solid #ccc;
-            display: {% if context_preview_text %}block{% else %}none{% endif %};
-        }
-        .context-textarea {
             width: 100%;
             min-height: 100px;
             resize: vertical;
@@ -214,9 +201,9 @@
                 <button type="submit" formaction="/get-messages" onclick="return validateForm('history')">View Message History</button>
                 <button type="submit" formaction="/preview-response" onclick="return validateForm('preview')">Preview Response</button>
                 <button type="submit" formaction="/send-preview" id="send-preview-button" onclick="return validateForm('send-preview')" style="display: {% if preview_text %}inline-block{% else %}none{% endif %};">Send Preview</button>
-                <button type="submit" formaction="/update-context" onclick="return validateForm('update-context')">Update Context</button>
                 <button type="submit" formaction="/toggle-auto-reply" onclick="return validateForm('toggle')">Toggle Auto-Reply</button>
                 <a href="/keywords" class="button" style="display: inline-block; text-decoration: none; text-align: center;">Manage Keywords</a>
+                <a href="/context" class="button" style="display: inline-block; text-decoration: none; text-align: center;">Update Context</a>
             </div>
 
             {% if preview_text %}
@@ -226,17 +213,6 @@
                         <div>
                             <strong>User ID: {{ user_id }}</strong>
                             <textarea class="preview-textarea" name="preview_text_{{ user_id }}">{{ text }}</textarea>
-                        </div>
-                    {% endfor %}
-                </div>
-            {% endif %}
-            {% if context_preview_text %}
-                <div class="context-area">
-                    <h4>Context Update Preview</h4>
-                    {% for user_id, text in context_preview_text.items() %}
-                        <div>
-                            <strong>User ID: {{ user_id }}</strong>
-                            <textarea class="context-textarea" readonly>{{ text }}</textarea>
                         </div>
                     {% endfor %}
                 </div>
@@ -293,7 +269,7 @@
                 return false;
             }
 
-            if (action === 'send' || action === 'preview' || action === 'update-context') {
+            if (action === 'send' || action === 'preview') {
                 if (!instruction) {
                     alert(`Please provide an instruction for ChatGPT for ${action}.`);
                     return false;
@@ -308,7 +284,7 @@
                 }
                 // Add preview_text to form
                 $('#main-form').find('input[name="preview_text"]').remove();
-                $('#main-form').append(`<input type="hidden" name="preview_text" value="${previewText.replace(/"/g, '&quot;')}">`);
+                $('#main-form').append(`<input type="hidden" name="preview_text" value="${previewText.replace(/"/g, '"')}">`);
             }
 
             return true;
