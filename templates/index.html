@@ -176,7 +176,7 @@
 <body>
     <div class="container">
         <h1>ChatGPT Telegram Messenger</h1>
-        <form method="post" action="/" id="send-form">
+        <form method="post" id="main-form" enctype="multipart/form-data">
             <div class="form-group">
                 <label>Select Contacts</label>
                 <div class="user-checkboxes">
@@ -210,53 +210,52 @@
             </div>
 
             <div class="button-group">
-                <button type="submit" onclick="return validateSendForm()">Send Message</button>
-                <button type="button" id="view-history-button" onclick="viewHistory()">View Message History</button>
-                <button type="submit" formaction="/preview-response" onclick="return validatePreviewForm()">Preview Response</button>
-                <button type="button" id="send-preview-button" onclick="sendPreviewManually()" style="display: {% if preview_text %}inline-block{% else %}none{% endif %};">Send Preview</button>
-                <button type="submit" formaction="/update-context" onclick="return validateUpdateContextForm()">Update Context</button>
-                <button type="button" onclick="submitToggleForm()">Toggle Auto-Reply</button>
+                <button type="submit" formaction="/" onclick="return validateForm('send')">Send Message</button>
+                <button type="submit" formaction="/get-messages" onclick="return validateForm('history')">View Message History</button>
+                <button type="submit" formaction="/preview-response" onclick="return validateForm('preview')">Preview Response</button>
+                <button type="submit" formaction="/send-preview" id="send-preview-button" onclick="return validateForm('send-preview')" style="display: {% if preview_text %}inline-block{% else %}none{% endif %};">Send Preview</button>
+                <button type="submit" formaction="/update-context" onclick="return validateForm('update-context')">Update Context</button>
+                <button type="submit" formaction="/toggle-auto-reply" onclick="return validateForm('toggle')">Toggle Auto-Reply</button>
                 <a href="/keywords" class="button" style="display: inline-block; text-decoration: none; text-align: center;">Manage Keywords</a>
             </div>
 
             {% if preview_text %}
                 <div class="preview-area">
                     <h4>Editable Preview Response</h4>
-                    <textarea class="preview-textarea" id="editable_preview_text" name="preview_text">{{ preview_text }}</textarea>
+                    {% for user_id, text in preview_text.items() %}
+                        <div>
+                            <strong>User ID: {{ user_id }}</strong>
+                            <textarea class="preview-textarea" name="preview_text_{{ user_id }}">{{ text }}</textarea>
+                        </div>
+                    {% endfor %}
                 </div>
             {% endif %}
             {% if context_preview_text %}
                 <div class="context-area">
                     <h4>Context Update Preview</h4>
-                    <textarea class="context-textarea" id="context_preview_text" name="context_preview_text" readonly>{{ context_preview_text }}</textarea>
+                    {% for user_id, text in context_preview_text.items() %}
+                        <div>
+                            <strong>User ID: {{ user_id }}</strong>
+                            <textarea class="context-textarea" readonly>{{ text }}</textarea>
+                        </div>
+                    {% endfor %}
                 </div>
             {% endif %}
-        </form>
-
-        <form method="post" action="/get-messages" id="history-form" style="display: none;">
-            <input type="hidden" name="user_ids" id="history_user_ids">
-            <input type="hidden" name="custom_user_id" id="history_custom_user_id">
-        </form>
-
-        <form method="post" action="/toggle-auto-reply" id="toggle-form" style="display: none;">
-            <input type="hidden" name="user_ids" id="toggle_user_ids">
-            <input type="hidden" name="custom_user_id" id="toggle_custom_user_id">
-        </form>
-
-        <form method="post" action="/send-preview" id="send-preview-form" style="display: none;">
-            <input type="hidden" name="user_ids" id="send_preview_user_ids">
-            <input type="hidden" name="custom_user_id" id="send_preview_custom_user_id">
-            <input type="hidden" name="preview_text" id="send_preview_text">
         </form>
 
         {% if messages %}
             <div class="message-history" id="message-history">
                 <h3>Last 10 Messages (Newest First)</h3>
-                {% for message in messages %}
-                    <div class="message-item">
-                        <div class="message-sender">{{ message.sender }}</div>
-                        <div class="message-timestamp">{{ message.timestamp }}</div>
-                        <div class="message-text">{{ message.text }}</div>
+                {% for user_id, user_messages in messages.items() %}
+                    <div>
+                        <h4>User ID: {{ user_id }}</h4>
+                        {% for message in user_messages %}
+                            <div class="message-item">
+                                <div class="message-sender">{{ message.sender }}</div>
+                                <div class="message-timestamp">{{ message.timestamp }}</div>
+                                <div class="message-text">{{ message.text }}</div>
+                            </div>
+                        {% endfor %}
                     </div>
                 {% endfor %}
             </div>
@@ -283,117 +282,36 @@
         let lastUserIds = {{ selected_user_ids | tojson }};
         let lastCustomUserId = {{ custom_user_id | default('') | tojson }};
 
-        function validateSendForm() {
+        function validateForm(action) {
             const userIds = $('input[name="user_ids"]:checked').map((_, el) => el.value).get();
             const customUserId = $('#custom_user_id').val().trim();
             const instruction = $('#instruction').val().trim();
-            console.log('Send form validation:', { userIds, customUserId, instruction });
+            console.log(`Validating form for ${action}:`, { userIds, customUserId, instruction });
+
             if (userIds.length === 0 && !customUserId) {
                 alert('Please select at least one contact or enter a Telegram user ID.');
                 return false;
             }
-            if (!instruction) {
-                alert('Please provide an instruction for ChatGPT.');
-                return false;
+
+            if (action === 'send' || action === 'preview' || action === 'update-context') {
+                if (!instruction) {
+                    alert(`Please provide an instruction for ChatGPT for ${action}.`);
+                    return false;
+                }
             }
+
+            if (action === 'send-preview') {
+                const previewText = $('.preview-textarea').first().val().trim();
+                if (!previewText) {
+                    alert('No preview text available to send. Please generate a preview first.');
+                    return false;
+                }
+                // Add preview_text to form
+                $('#main-form').find('input[name="preview_text"]').remove();
+                $('#main-form').append(`<input type="hidden" name="preview_text" value="${previewText.replace(/"/g, '&quot;')}">`);
+            }
+
             return true;
-        }
-
-        function validatePreviewForm() {
-            const userIds = $('input[name="user_ids"]:checked').map((_, el) => el.value).get();
-            const customUserId = $('#custom_user_id').val().trim();
-            const instruction = $('#instruction').val().trim();
-            console.log('Preview form validation:', { userIds, customUserId, instruction });
-            if (userIds.length === 0 && !customUserId) {
-                alert('Please select at least one contact or enter a Telegram user ID.');
-                return false;
-            }
-            if (!instruction) {
-                alert('Please provide an instruction for ChatGPT.');
-                return false;
-            }
-            return true;
-        }
-
-        function validateUpdateContextForm() {
-            const userIds = $('input[name="user_ids"]:checked').map((_, el) => el.value).get();
-            const customUserId = $('#custom_user_id').val().trim();
-            const instruction = $('#instruction').val().trim();
-            console.log('Update context form validation:', { userIds, customUserId, instruction });
-            if (userIds.length === 0 && !customUserId) {
-                alert('Please select at least one contact or enter a Telegram user ID.');
-                return false;
-            }
-            if (!instruction) {
-                alert('Please provide an instruction for context update.');
-                return false;
-            }
-            return true;
-        }
-
-        function validateSendPreviewForm() {
-            const userIds = $('input[name="user_ids"]:checked').map((_, el) => el.value).get();
-            const customUserId = $('#custom_user_id').val().trim();
-            const previewText = $('#editable_preview_text').val().trim();
-            console.log('Send preview form validation:', { userIds, customUserId, previewText });
-            if (userIds.length === 0 && !customUserId) {
-                alert('Please select at least one contact or enter a Telegram user ID.');
-                return false;
-            }
-            if (!previewText) {
-                alert('No preview text available to send. Please generate a preview first.');
-                return false;
-            }
-            return true;
-        }
-
-        function sendPreviewManually() {
-            if (validateSendPreviewForm()) {
-                const form = $('#send-preview-form');
-                const userIds = $('input[name="user_ids"]:checked').map((_, el) => el.value).get().join(',');
-                const customUserId = $('#custom_user_id').val().trim();
-                const previewText = $('#editable_preview_text').val().trim();
-
-                $('#send_preview_user_ids').val(userIds);
-                $('#send_preview_custom_user_id').val(customUserId);
-                $('#send_preview_text').val(previewText);
-
-                console.log('Submitting preview form:', { user_ids: userIds, custom_user_id: customUserId, preview_text: previewText });
-                form.submit();
-            }
-        }
-
-        function viewHistory() {
-            const userIds = $('input[name="user_ids"]:checked').map((_, el) => el.value).get();
-            const customUserId = $('#custom_user_id').val().trim();
-
-            if (userIds.length === 0 && !customUserId) {
-                alert('Please select at least one contact or enter a Telegram user ID.');
-                return;
-            }
-
-            const userIdsChanged = JSON.stringify(userIds) !== JSON.stringify(lastUserIds) || customUserId !== lastCustomUserId;
-            if (userIdsChanged) {
-                lastUserIds = userIds;
-                lastCustomUserId = customUserId;
-                $('#history_user_ids').val(userIds.join(','));
-                $('#history_custom_user_id').val(customUserId);
-                console.log('Submitting history form:', { user_ids: userIds, custom_user_id: customUserId });
-                $('#history-form').submit();
-            }
-        }
-
-        function submitToggleForm() {
-            const userIds = $('input[name="user_ids"]:checked').map((_, el) => el.value).get();
-            const customUserId = $('#custom_user_id').val().trim();
-            if (userIds.length === 0 && !customUserId) {
-                alert('Please select at least one contact or enter a Telegram user ID.');
-                return;
-            }
-            $('#toggle_user_ids').val(userIds.join(','));
-            $('#toggle_custom_user_id').val(customUserId);
-            console.log('Submitting toggle form:', { user_ids: userIds, custom_user_id: customUserId });
-            $('#toggle-form').submit();
         }
     </script>
 </body>

@@ -56,7 +56,7 @@ def save_config(notification_user_id: str | None):
         logger.error(f"Error saving config: {e}")
 
 
-# Initialize keywords and notification user ID
+# Initialize keywords
 def load_keywords():
     try:
         if os.path.exists(CONFIG["KEYWORDS_FILE"]):
@@ -266,23 +266,27 @@ async def handle_message(event):
     await client.send_message(sender.id, response)
 
 
-# Helper: Fetch last 10 messages
-async def get_last_messages(user_id: int, limit: int = 10):
-    try:
-        messages = []
-        async for msg in client.iter_messages(user_id, limit=limit):
-            if msg.text:
-                sender = await msg.get_sender()
-                sender_name = sender.username or sender.first_name or "Unknown" if sender else "Bot"
-                messages.append({
-                    "sender": sender_name,
-                    "text": msg.text,
-                    "timestamp": msg.date.strftime("%Y-%m-%d %H:%M:%S")
-                })
-        return messages[::-1]  # Newest first
-    except Exception as e:
-        logger.error(f"Error fetching messages for user {user_id}: {e}")
-        return []
+# Helper: Fetch last 10 messages for multiple users
+async def get_last_messages(user_ids: List[int], limit: int = 10) -> Dict[int, List[Dict]]:
+    messages = {}
+    for user_id in user_ids:
+        try:
+            user_messages = []
+            async for msg in client.iter_messages(user_id, limit=limit):
+                if msg.text:
+                    sender = await msg.get_sender()
+                    sender_name = sender.username or sender.first_name or "Unknown" if sender else "Bot"
+                    user_messages.append({
+                        "sender": sender_name,
+                        "text": msg.text,
+                        "timestamp": msg.date.strftime("%Y-%m-%d %H:%M:%S"),
+                        "user_id": user_id
+                    })
+            messages[user_id] = user_messages[::-1]  # Newest first
+        except Exception as e:
+            logger.error(f"Error fetching messages for user {user_id}: {e}")
+            messages[user_id] = []
+    return messages
 
 
 # Helper: Users only
@@ -352,13 +356,14 @@ async def gpt_message_form(request: Request):
 @app.post("/", response_class=HTMLResponse)
 async def send_gpt_message(
         request: Request,
-        user_ids: List[int] = Form(default=[]),
-        custom_user_id: str = Form(default=""),
-        instruction: str = Form(default="")
+        user_ids: List[str] = Form(default=[]),
+        custom_user_id: str = Form(default="")
 ):
     try:
+        form_data = await request.form()
         logger.info(
-            f"Send message request: user_ids={user_ids}, custom_user_id={custom_user_id}, instruction={instruction}")
+            f"Send message request: user_ids={user_ids}, custom_user_id={custom_user_id}, form_data={dict(form_data)}")
+        user_ids_int = [int(uid) for uid in user_ids if uid.strip()]
         custom_ids = []
         if custom_user_id.strip():
             try:
@@ -366,7 +371,7 @@ async def send_gpt_message(
             except ValueError:
                 logger.warning(f"Invalid custom user IDs: {custom_user_id}")
 
-        target_ids = list(set(user_ids + custom_ids))
+        target_ids = list(set(user_ids_int + custom_ids))
         if not target_ids:
             raise ValueError("Please select at least one contact or provide a custom user ID.")
 
@@ -382,11 +387,12 @@ async def send_gpt_message(
                 if target_id in custom_ids:
                     custom_ids.remove(target_id)
 
-        target_ids = list(set(user_ids + custom_ids))
+        target_ids = list(set(user_ids_int + custom_ids))
         if not target_ids:
             raise ValueError("No valid user IDs provided.")
 
-        if not instruction.strip():
+        instruction = form_data.get("instruction", "").strip()
+        if not instruction:
             raise ValueError("Please provide an instruction for ChatGPT.")
 
         for target_id in target_ids:
@@ -411,7 +417,7 @@ async def send_gpt_message(
             "request": request,
             "users": users,
             "error": str(e),
-            "selected_user_ids": user_ids,
+            "selected_user_ids": user_ids_int,
             "custom_user_id": custom_user_id,
             "messages": [],
             "preview_text": None,
@@ -422,11 +428,14 @@ async def send_gpt_message(
 @app.post("/get-messages", response_class=HTMLResponse)
 async def get_messages(
         request: Request,
-        user_ids: List[int] = Form(default=[]),
+        user_ids: List[str] = Form(default=[]),
         custom_user_id: str = Form(default="")
 ):
     try:
-        logger.info(f"Get messages request: user_ids={user_ids}, custom_user_id={custom_user_id}")
+        form_data = await request.form()
+        logger.info(
+            f"Get messages request: user_ids={user_ids}, custom_user_id={custom_user_id}, form_data={dict(form_data)}")
+        user_ids_int = [int(uid) for uid in user_ids if uid.strip()]
         custom_ids = []
         if custom_user_id.strip():
             try:
@@ -434,20 +443,25 @@ async def get_messages(
             except ValueError:
                 logger.warning(f"Invalid custom user IDs: {custom_user_id}")
 
-        target_ids = list(set(user_ids + custom_ids))
+        target_ids = list(set(user_ids_int + custom_ids))
         if not target_ids:
             raise ValueError("Please select at least one contact or provide a custom user ID.")
 
-        target_id = target_ids[0]
-        if target_id in custom_ids:
+        for target_id in custom_ids:
             try:
                 entity = await client.get_entity(target_id)
                 if not isinstance(entity, User):
-                    raise ValueError(f"The ID {target_id} does not correspond to a user.")
+                    logger.warning(f"ID is not a user: {target_id}")
+                    if target_id in custom_ids:
+                        custom_ids.remove(target_id)
             except PeerIdInvalidError:
                 raise ValueError(f"Invalid Telegram user ID {target_id} or the user is not accessible.")
 
-        messages = await get_last_messages(target_id)
+        target_ids = list(set(user_ids_int + custom_ids))
+        if not target_ids:
+            raise ValueError("No valid user IDs provided.")
+
+        messages = await get_last_messages(target_ids)
 
         users = await get_dialog_user_list()
         return templates.TemplateResponse("index.html", {
@@ -465,7 +479,7 @@ async def get_messages(
             "request": request,
             "users": users,
             "error": str(e),
-            "selected_user_ids": user_ids,
+            "selected_user_ids": user_ids_int,
             "custom_user_id": custom_user_id,
             "messages": [],
             "preview_text": None,
@@ -476,11 +490,14 @@ async def get_messages(
 @app.post("/toggle-auto-reply", response_class=HTMLResponse)
 async def toggle_auto_reply(
         request: Request,
-        user_ids: List[int] = Form(default=[]),
+        user_ids: List[str] = Form(default=[]),
         custom_user_id: str = Form(default="")
 ):
     try:
-        logger.info(f"Toggle auto-reply request: user_ids={user_ids}, custom_user_id={custom_user_id}")
+        form_data = await request.form()
+        logger.info(
+            f"Toggle auto-reply request: user_ids={user_ids}, custom_user_id={custom_user_id}, form_data={dict(form_data)}")
+        user_ids_int = [int(uid) for uid in user_ids if uid.strip()]
         custom_ids = []
         if custom_user_id.strip():
             try:
@@ -488,7 +505,7 @@ async def toggle_auto_reply(
             except ValueError:
                 logger.warning(f"Invalid custom user IDs: {custom_user_id}")
 
-        target_ids = list(set(user_ids + custom_ids))
+        target_ids = list(set(user_ids_int + custom_ids))
         if not target_ids:
             raise ValueError("Please select at least one contact or provide a custom user ID.")
 
@@ -504,7 +521,7 @@ async def toggle_auto_reply(
                 if target_id in custom_ids:
                     custom_ids.remove(target_id)
 
-        target_ids = list(set(user_ids + custom_ids))
+        target_ids = list(set(user_ids_int + custom_ids))
         if not target_ids:
             raise ValueError("No valid user IDs provided.")
 
@@ -538,7 +555,7 @@ async def toggle_auto_reply(
             "request": request,
             "users": users,
             "error": str(e),
-            "selected_user_ids": user_ids,
+            "selected_user_ids": user_ids_int,
             "custom_user_id": custom_user_id,
             "messages": [],
             "preview_text": None,
@@ -549,13 +566,14 @@ async def toggle_auto_reply(
 @app.post("/preview-response", response_class=HTMLResponse)
 async def preview_response(
         request: Request,
-        user_ids: List[int] = Form(default=[]),
-        custom_user_id: str = Form(default=""),
-        instruction: str = Form(default="")
+        user_ids: List[str] = Form(default=[]),
+        custom_user_id: str = Form(default="")
 ):
     try:
+        form_data = await request.form()
         logger.info(
-            f"Preview response request: user_ids={user_ids}, custom_user_id={custom_user_id}, instruction={instruction}")
+            f"Preview response request: user_ids={user_ids}, custom_user_id={custom_user_id}, form_data={dict(form_data)}")
+        user_ids_int = [int(uid) for uid in user_ids if uid.strip()]
         custom_ids = []
         if custom_user_id.strip():
             try:
@@ -563,34 +581,52 @@ async def preview_response(
             except ValueError:
                 logger.warning(f"Invalid custom user IDs: {custom_user_id}")
 
-        target_ids = list(set(user_ids + custom_ids))
+        target_ids = list(set(user_ids_int + custom_ids))
         if not target_ids:
             raise ValueError("Please select at least one contact or provide a custom user ID.")
-        if not instruction.strip():
+
+        for target_id in custom_ids:
+            try:
+                entity = await client.get_entity(target_id)
+                if not isinstance(entity, User):
+                    logger.warning(f"ID is not a user: {target_id}")
+                    if target_id in custom_ids:
+                        custom_ids.remove(target_id)
+            except PeerIdInvalidError:
+                logger.warning(f"Invalid Telegram user ID: {target_id}")
+                if target_id in custom_ids:
+                    custom_ids.remove(target_id)
+
+        target_ids = list(set(user_ids_int + custom_ids))
+        if not target_ids:
+            raise ValueError("No valid user IDs provided.")
+
+        instruction = form_data.get("instruction", "").strip()
+        if not instruction:
             raise ValueError("Please provide an instruction for ChatGPT.")
 
         preview_texts = {}
         for target_id in target_ids:
             preview_texts[target_id] = await ask_chatgpt(target_id, instruction, send_message=False)
-        preview_text = preview_texts.get(target_ids[0], "No preview generated.")
 
         users = await get_dialog_user_list()
         return templates.TemplateResponse("index.html", {
             "request": request,
             "users": users,
-            "selected_user_ids": user_ids,
+            "selected_user_ids": target_ids,
             "custom_user_id": custom_user_id,
             "messages": [],
-            "preview_text": preview_text,
+            "preview_text": preview_texts,
             "context_preview_text": None
         })
     except Exception as e:
+        logger.error(f"Error in preview_response: {e}")
         users = await get_dialog_user_list()
         return templates.TemplateResponse("index.html", {
             "request": request,
             "users": users,
             "error": str(e),
-            "selected_user_ids": user_ids,
+            "selected_user_ids": user_ids_int,
             "custom_user_id": custom_user_id,
             "messages": [],
             "preview_text": None,
@@ -601,13 +637,14 @@ async def preview_response(
 @app.post("/update-context", response_class=HTMLResponse)
 async def update_context(
         request: Request,
-        user_ids: List[int] = Form(default=[]),
-        custom_user_id: str = Form(default=""),
-        instruction: str = Form(default="")
+        user_ids: List[str] = Form(default=[]),
+        custom_user_id: str = Form(default="")
 ):
     try:
+        form_data = await request.form()
         logger.info(
-            f"Update context request: user_ids={user_ids}, custom_user_id={custom_user_id}, instruction={instruction}")
+            f"Update context request: user_ids={user_ids}, custom_user_id={custom_user_id}, form_data={dict(form_data)}")
+        user_ids_int = [int(uid) for uid in user_ids if uid.strip()]
         custom_ids = []
         if custom_user_id.strip():
             try:
@@ -615,34 +652,52 @@ async def update_context(
             except ValueError:
                 logger.warning(f"Invalid custom user IDs: {custom_user_id}")
 
-        target_ids = list(set(user_ids + custom_ids))
+        target_ids = list(set(user_ids_int + custom_ids))
         if not target_ids:
             raise ValueError("Please select at least one contact or provide a custom user ID.")
-        if not instruction.strip():
+
+        for target_id in custom_ids:
+            try:
+                entity = await client.get_entity(target_id)
+                if not isinstance(entity, User):
+                    logger.warning(f"ID is not a user: {target_id}")
+                    if target_id in custom_ids:
+                        custom_ids.remove(target_id)
+            except PeerIdInvalidError:
+                logger.warning(f"Invalid Telegram user ID: {target_id}")
+                if target_id in custom_ids:
+                    custom_ids.remove(target_id)
+
+        target_ids = list(set(user_ids_int + custom_ids))
+        if not target_ids:
+            raise ValueError("No valid user IDs provided.")
+
+        instruction = form_data.get("instruction", "").strip()
+        if not instruction:
             raise ValueError("Please provide an instruction for context update.")
 
         context_preview_texts = {}
         for target_id in target_ids:
             context_preview_texts[target_id] = await ask_chatgpt(target_id, instruction, send_message=False)
-        context_preview_text = context_preview_texts.get(target_ids[0], "No context update generated.")
 
         users = await get_dialog_user_list()
         return templates.TemplateResponse("index.html", {
             "request": request,
             "users": users,
-            "selected_user_ids": user_ids,
+            "selected_user_ids": target_ids,
             "custom_user_id": custom_user_id,
             "messages": [],
             "preview_text": None,
-            "context_preview_text": context_preview_text
+            "context_preview_text": context_preview_texts
         })
     except Exception as e:
+        logger.error(f"Error in update_context: {e}")
         users = await get_dialog_user_list()
         return templates.TemplateResponse("index.html", {
             "request": request,
             "users": users,
             "error": str(e),
-            "selected_user_ids": user_ids,
+            "selected_user_ids": user_ids_int,
             "custom_user_id": custom_user_id,
             "messages": [],
             "preview_text": None,
@@ -653,13 +708,15 @@ async def update_context(
 @app.post("/send-preview", response_class=HTMLResponse)
 async def send_preview(
         request: Request,
-        user_ids: List[int] = Form(default=[]),
+        user_ids: List[str] = Form(default=[]),
         custom_user_id: str = Form(default=""),
         preview_text: str = Form(...)
 ):
     try:
+        form_data = await request.form()
         logger.info(
-            f"Send preview request: user_ids={user_ids}, custom_user_id={custom_user_id}, preview_text={preview_text}")
+            f"Send preview request: user_ids={user_ids}, custom_user_id={custom_user_id}, preview_text={preview_text}, form_data={dict(form_data)}")
+        user_ids_int = [int(uid) for uid in user_ids if uid.strip()]
         custom_ids = []
         if custom_user_id.strip():
             try:
@@ -667,7 +724,7 @@ async def send_preview(
             except ValueError:
                 logger.warning(f"Invalid custom user IDs: {custom_user_id}")
 
-        target_ids = list(set(user_ids + custom_ids))
+        target_ids = list(set(user_ids_int + custom_ids))
         if not target_ids:
             raise ValueError("Please select at least one contact or provide a custom user ID.")
         if not preview_text.strip():
@@ -682,7 +739,7 @@ async def send_preview(
             "users": users,
             "success": True,
             "sent_text": preview_text,
-            "selected_user_ids": user_ids,
+            "selected_user_ids": target_ids,
             "custom_user_id": custom_user_id,
             "messages": [],
             "preview_text": None,
@@ -695,7 +752,7 @@ async def send_preview(
             "request": request,
             "users": users,
             "error": str(e),
-            "selected_user_ids": user_ids,
+            "selected_user_ids": user_ids_int,
             "custom_user_id": custom_user_id,
             "messages": [],
             "preview_text": None,
@@ -723,6 +780,9 @@ async def update_keywords(
 ):
     global AUTO_REPLY_DISABLE_KEYWORDS, NOTIFICATION_USER_ID
     try:
+        form_data = await request.form()
+        logger.info(
+            f"Update keywords request: keywords={keywords}, notification_user_id={notification_user_id}, form_data={dict(form_data)}")
         new_keywords = [keyword.strip() for keyword in keywords.split(",") if keyword.strip()]
         if not new_keywords:
             raise ValueError("At least one keyword must be provided.")
