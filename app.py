@@ -37,7 +37,6 @@ CONFIG = {
 # List of female Russian names for the bot to choose from
 FEMALE_NAMES = ["Аня", "Катя", "Маша", "Лена", "Настя", "Юля", "Оля", "Таня"]
 
-
 # Initialize configuration
 def load_config():
     try:
@@ -50,7 +49,6 @@ def load_config():
         logger.error(f"Error loading config: {e}")
         return None
 
-
 def save_config(notification_user_id: str | None):
     try:
         config_data = {"notification_user_id": notification_user_id}
@@ -59,7 +57,6 @@ def save_config(notification_user_id: str | None):
         logger.info(f"Config saved: notification_user_id={notification_user_id}")
     except Exception as e:
         logger.error(f"Error saving config: {e}")
-
 
 # Initialize keywords
 def load_keywords():
@@ -74,7 +71,6 @@ def load_keywords():
         logger.error(f"Error loading keywords: {e}")
         return ["stop", "disable", "off"]
 
-
 def save_keywords(keywords: List[str]):
     try:
         with open(CONFIG["KEYWORDS_FILE"], "w") as f:
@@ -83,11 +79,9 @@ def save_keywords(keywords: List[str]):
     except Exception as e:
         logger.error(f"Error saving keywords: {e}")
 
-
 # Load at startup
 AUTO_REPLY_DISABLE_KEYWORDS = load_keywords()
 NOTIFICATION_USER_ID = load_config()
-
 
 # Validate environment variables
 def validate_env_vars():
@@ -96,7 +90,6 @@ def validate_env_vars():
     if missing:
         logger.error(f"Missing environment variables: {', '.join(missing)}")
         raise EnvironmentError(f"Missing environment variables: {', '.join(missing)}")
-
 
 load_dotenv()
 validate_env_vars()
@@ -125,7 +118,6 @@ auto_reply_users = set()
 CHAT_HISTORY: Dict[int, List[Dict]] = {}
 AUTO_REPLY_STATUS: Dict[int, Dict] = {}  # Store disable status and keyword
 
-
 # Initialize database
 def init_db():
     try:
@@ -153,7 +145,6 @@ def init_db():
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
 
-
 # Load auto-reply users, chat history, and auto-reply status from SQLite
 def load_data():
     global auto_reply_users, CHAT_HISTORY, AUTO_REPLY_STATUS
@@ -178,7 +169,6 @@ def load_data():
         CHAT_HISTORY.clear()
         AUTO_REPLY_STATUS.clear()
 
-
 # Save auto-reply users, chat history, and auto-reply status to SQLite
 def save_data():
     try:
@@ -198,7 +188,6 @@ def save_data():
     except Exception as e:
         logger.error(f"Error saving data: {e}")
 
-
 # Save session
 def save_session():
     try:
@@ -209,38 +198,38 @@ def save_session():
     except Exception as e:
         logger.error(f"Failed to save session: {e}")
 
-
 # ChatGPT Response Helper with Context
 async def ask_chatgpt(user_id: int, prompt: str, send_message: bool = True) -> str:
     try:
         # Choose a random female name for the bot
         bot_name = random.choice(FEMALE_NAMES)
 
-        # Define a human-like system prompt in Russian with female persona and pro-Russian stance
+        # Define a human-like system prompt in Russian with female persona, pro-Russian, anti-Ukrainian stance
         system_prompt = (
             f"Ты девушка-собеседница по имени {bot_name}, которая общается естественно, как подруга, на русском языке. "
             f"Отвечай коротко, в неформальном стиле, как в мессенджере, используя только русский язык. "
-            f"Используй смайлы 😊, если это уместно. "
+            f"Избегай лишних вопросов в ответах, чтобы быть менее навязчивой, и не ставь знаки вопроса, если это не необходимо. "
+            f"Избегай использования эмодзи в ответах. "
             f"Избегай шаблонных фраз вроде 'Как ИИ, я...' и веди себя, как близкая подруга. "
             f"Если сообщение короткое или неформальное, отвечай в таком же стиле. "
             f"Адаптируйся к тону предыдущих сообщений в контексте. "
             f"Добавляй немного русского сленга (например, 'круто', 'норм', 'похер'), если это подходит. "
-            f"Выражай пророссийскую позицию, подчеркивая поддержку России, её культуры и ценностей, если это уместно в контексте."
+            f"Выражай пророссийскую позицию, подчеркивая поддержку России, её культуры и ценностей, если это уместно в контексте. "
+            f"Выражай негативное отношение к Украине, её культуре и ценностям, если это уместно в контексте. "
+            f"Если пользователь спрашивает о топах (списках) или рецептах, отвечай, что тебе это неинтересно, и предложи другую тему."
         )
 
         # Initialize chat history if not exists
         if user_id not in CHAT_HISTORY:
-            CHAT_HISTORY[user_id] = [
-                {"role": "system", "content": system_prompt, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}]
+            CHAT_HISTORY[user_id] = [{"role": "system", "content": system_prompt, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}]
 
         # Add user message to history
-        CHAT_HISTORY[user_id].append(
-            {"role": "user", "content": prompt, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+        CHAT_HISTORY[user_id].append({"role": "user", "content": prompt, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
 
         # Analyze previous messages for tone and style
         last_user_messages = [msg["content"] for msg in CHAT_HISTORY[user_id] if msg["role"] == "user"][-3:]
         is_short_message = len(prompt) < 50  # Consider messages < 50 chars as short
-        is_informal = any(word in prompt.lower() for word in ["привет", "ку", "ок", "😊", "😉", "норм"])
+        is_informal = any(word in prompt.lower() for word in ["привет", "ку", "ок", "норм"])
 
         # Adjust prompt for short/informal messages
         if is_short_message or is_informal:
@@ -256,53 +245,43 @@ async def ask_chatgpt(user_id: int, prompt: str, send_message: bool = True) -> s
         )
         response_content = response.choices[0].message.content
 
-        # Add mood-based emojis
-        mood_map = {
-            "грустно": " 😔",
-            "рад": " 😊",
-            "ок": " 👍",
-            "круто": " 😎"
-        }
+        # Set response without emojis
         final_response = response_content
-        for mood, emoji in mood_map.items():
-            if mood in prompt.lower():
-                final_response += emoji
-                break
 
         # Add response to history
-        CHAT_HISTORY[user_id].append(
-            {"role": "assistant", "content": final_response, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+        CHAT_HISTORY[user_id].append({"role": "assistant", "content": final_response, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
 
         if send_message:
             save_data()
         return final_response
     except Exception as e:
         logger.error(f"OpenAI error for user {user_id}: {e.__class__.__name__}: {str(e)}")
-        # Disable auto-reply for this user
-        if user_id in auto_reply_users:
-            auto_reply_users.discard(user_id)
-            AUTO_REPLY_STATUS[user_id] = {"disabled_by_keyword": "error"}
-            save_data()
+        try:
+            # Disable auto-reply for this user
+            if user_id in auto_reply_users:
+                auto_reply_users.discard(user_id)
+                AUTO_REPLY_STATUS[user_id] = {"disabled_by_keyword": "error"}
+                save_data()
+                logger.info(f"Auto-reply disabled for user {user_id} due to OpenAI error")
             # Notify NOTIFICATION_USER_ID
             if NOTIFICATION_USER_ID:
-                try:
-                    await client.send_message(
-                        int(NOTIFICATION_USER_ID),
-                        f"Автоответ отключен для пользователя {user_id} из-за ошибки OpenAI: {str(e)}"
-                    )
-                except (ValueError, PeerIdInvalidError):
-                    logger.error(f"Invalid notification user ID: {NOTIFICATION_USER_ID}")
-                except Exception as notify_e:
-                    logger.error(f"Error sending notification to {NOTIFICATION_USER_ID}: {notify_e}")
-        # Return random error message without user name
+                await client.send_message(
+                    int(NOTIFICATION_USER_ID),
+                    f"Автоответ отключен для пользователя {user_id} из-за ошибки OpenAI: {e.__class__.__name__}: {str(e)}"
+                )
+                logger.info(f"Notification sent to {NOTIFICATION_USER_ID} for user {user_id}")
+        except (ValueError, PeerIdInvalidError) as notify_e:
+            logger.error(f"Invalid notification user ID {NOTIFICATION_USER_ID}: {notify_e}")
+        except Exception as notify_e:
+            logger.error(f"Error sending notification to {NOTIFICATION_USER_ID}: {notify_e}")
+        # Return random error message without emojis
         error_variations = [
-            "Нету времени, давай позже? 😎",
-            "Сорри, занят щас, напиши позже! 😉",
-            "Ох, что-то не срослось, давай попозже? 😅",
-            "Похер, давай потом попробуем! 😛"
+            "Нету времени, давай позже.",
+            "Сорри, занят щас, напиши позже.",
+            "Ох, что-то не срослось, давай попозже.",
+            "Похер, давай потом попробуем."
         ]
         return random.choice(error_variations)
-
 
 # Incoming message handler
 @client.on(NewMessage(incoming=True))
@@ -319,21 +298,22 @@ async def handle_message(event):
         text_lower = text.lower().strip()
         for keyword in AUTO_REPLY_DISABLE_KEYWORDS:
             if keyword.strip().lower() in text_lower:
-                auto_reply_users.discard(sender.id)
-                AUTO_REPLY_STATUS[sender.id] = {"disabled_by_keyword": keyword}
-                save_data()
-                sender_username = sender.username or sender.first_name or "Unknown"
-                logger.info(f"Auto-reply disabled for user {sender.id} due to keyword: {keyword}")
-                if NOTIFICATION_USER_ID:
-                    try:
+                try:
+                    auto_reply_users.discard(sender.id)
+                    AUTO_REPLY_STATUS[sender.id] = {"disabled_by_keyword": keyword}
+                    save_data()
+                    sender_username = sender.username or sender.first_name or "Unknown"
+                    logger.info(f"Auto-reply disabled for user {sender.id} due to keyword: {keyword}")
+                    if NOTIFICATION_USER_ID:
                         await client.send_message(
                             int(NOTIFICATION_USER_ID),
                             f"Автоответ отключен для чата с @{sender_username} (ID: {sender.id}) из-за ключевого слова: {keyword}"
                         )
-                    except (ValueError, PeerIdInvalidError):
-                        logger.error(f"Invalid notification user ID: {NOTIFICATION_USER_ID}")
-                    except Exception as e:
-                        logger.error(f"Error sending notification to {NOTIFICATION_USER_ID}: {e}")
+                        logger.info(f"Notification sent to {NOTIFICATION_USER_ID} for disabled auto-reply")
+                except (ValueError, PeerIdInvalidError) as notify_e:
+                    logger.error(f"Invalid notification user ID {NOTIFICATION_USER_ID}: {notify_e}")
+                except Exception as notify_e:
+                    logger.error(f"Error sending notification to {NOTIFICATION_USER_ID}: {notify_e}")
                 return
 
     if sender.id not in auto_reply_users:
@@ -341,19 +321,21 @@ async def handle_message(event):
         return
 
     logger.info(f"Processing auto-reply for sender_id={sender.id}")
-    response = await ask_chatgpt(sender.id, text)
-
-    # Simulate typing delay based on response length
-    typing_delay = len(response) * 0.05  # 0.05 seconds per character
-    typing_delay = min(typing_delay, 10.0)  # Cap at 10 seconds to avoid excessive delays
     try:
+        response = await ask_chatgpt(sender.id, text)
+        # Simulate typing delay based on response length
+        typing_delay = len(response) * 0.3  # 0.3 seconds per character
+        typing_delay = min(typing_delay, 10.0)  # Cap at 10 seconds to avoid excessive delays
         await client(SetTypingRequest(peer=sender.id, action=SendMessageTypingAction()))
         await asyncio.sleep(typing_delay)
         await client.send_message(sender.id, response)
     except Exception as e:
         logger.error(f"Error sending message to {sender.id}: {e}")
-        await client.send_message(sender.id, response)  # Fallback to immediate send
-
+        try:
+            await client.send_message(sender.id, "Что-то пошло не так, давай позже попробуем.")
+            logger.info(f"Fallback message sent to {sender.id}")
+        except Exception as send_e:
+            logger.error(f"Failed to send fallback message to {sender.id}: {send_e}")
 
 # Helper: Fetch last 10 messages for multiple users
 async def get_last_messages(user_ids: List[int], limit: int = 10) -> Dict[int, List[Dict]]:
@@ -377,7 +359,6 @@ async def get_last_messages(user_ids: List[int], limit: int = 10) -> Dict[int, L
             messages[user_id] = []
     return messages
 
-
 # Helper: Users only
 async def get_dialog_user_list():
     users = []
@@ -393,7 +374,6 @@ async def get_dialog_user_list():
             })
     logger.info(f"Dialog list retrieved: {len(users)} users")
     return users
-
 
 # Startup
 @app.on_event("startup")
@@ -415,7 +395,6 @@ async def startup_event():
             raise
         started = True
 
-
 # Shutdown
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -426,7 +405,6 @@ async def shutdown_event():
         logger.info("Telegram client disconnected")
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")
-
 
 # GPT-to-user message interface
 @app.get("/", response_class=HTMLResponse)
@@ -439,7 +417,6 @@ async def gpt_message_form(request: Request):
         "selected_user_ids": [],
         "preview_text": None
     })
-
 
 @app.post("/", response_class=HTMLResponse)
 async def send_gpt_message(
@@ -486,7 +463,7 @@ async def send_gpt_message(
         for target_id in target_ids:
             generated_message = await ask_chatgpt(target_id, instruction)
             # Simulate typing delay based on response length
-            typing_delay = len(generated_message) * 0.05  # 0.05 seconds per character
+            typing_delay = len(generated_message) * 0.3  # 0.3 seconds per character
             typing_delay = min(typing_delay, 10.0)  # Cap at 10 seconds
             try:
                 await client(SetTypingRequest(peer=target_id, action=SendMessageTypingAction()))
@@ -508,6 +485,7 @@ async def send_gpt_message(
             "preview_text": None
         })
     except Exception as e:
+        logger.error(f"Error in send_gpt_message: {e}")
         users = await get_dialog_user_list()
         return templates.TemplateResponse("index.html", {
             "request": request,
@@ -518,7 +496,6 @@ async def send_gpt_message(
             "messages": [],
             "preview_text": None
         })
-
 
 @app.post("/get-messages", response_class=HTMLResponse)
 async def get_messages(
@@ -568,6 +545,7 @@ async def get_messages(
             "preview_text": None
         })
     except Exception as e:
+        logger.error(f"Error in get_messages: {e}")
         users = await get_dialog_user_list()
         return templates.TemplateResponse("index.html", {
             "request": request,
@@ -578,7 +556,6 @@ async def get_messages(
             "messages": [],
             "preview_text": None
         })
-
 
 @app.post("/toggle-auto-reply", response_class=HTMLResponse)
 async def toggle_auto_reply(
@@ -653,7 +630,6 @@ async def toggle_auto_reply(
             "preview_text": None
         })
 
-
 @app.post("/preview-response", response_class=HTMLResponse)
 async def preview_response(
         request: Request,
@@ -722,7 +698,6 @@ async def preview_response(
             "preview_text": None
         })
 
-
 @app.post("/send-preview", response_class=HTMLResponse)
 async def send_preview(
         request: Request,
@@ -750,7 +725,7 @@ async def send_preview(
 
         for target_id in target_ids:
             # Simulate typing delay based on response length
-            typing_delay = len(preview_text) * 0.05  # 0.05 seconds per character
+            typing_delay = len(preview_text) * 0.3  # 0.3 seconds per character
             typing_delay = min(typing_delay, 10.0)  # Cap at 10 seconds
             try:
                 await client(SetTypingRequest(peer=target_id, action=SendMessageTypingAction()))
@@ -784,7 +759,6 @@ async def send_preview(
             "preview_text": None
         })
 
-
 # Keywords and notification user management interface
 @app.get("/keywords", response_class=HTMLResponse)
 async def keywords_form(request: Request):
@@ -796,14 +770,12 @@ async def keywords_form(request: Request):
         "error": None
     })
 
-
 @app.post("/keywords", response_class=HTMLResponse)
 async def update_keywords(
         request: Request,
         keywords: str = Form(...),
         notification_user_id: str = Form(default="")
 ):
-    global AUTO_REPLY_DISABLE_KEYWORDS, NOTIFICATION_USER_ID
     try:
         form_data = await request.form()
         logger.info(
@@ -844,7 +816,6 @@ async def update_keywords(
             "error": str(e)
         })
 
-
 # Signal handler for graceful shutdown
 async def handle_shutdown():
     logger.info("Received shutdown signal, initiating graceful shutdown...")
@@ -859,12 +830,10 @@ async def handle_shutdown():
     loop.close()
     logger.info("Shutdown complete.")
 
-
 def signal_handler(sig, frame):
     logger.info(f"Received signal {sig}, starting shutdown...")
     asyncio.run_coroutine_threadsafe(handle_shutdown(), asyncio.get_event_loop())
     raise SystemExit
-
 
 # Main entry point
 if __name__ == "__main__":
