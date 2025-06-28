@@ -222,3 +222,62 @@ def save_data():
             f"Data saved: {len(auto_reply_users)} auto-reply users, {len(CHAT_HISTORY)} chat history users, {len(AUTO_REPLY_STATUS)} auto-reply status entries")
     except Exception as e:
         logger.error(f"Error saving data: {e}")
+
+
+async def get_dialog_user_list(client: TelegramClient) -> List[Dict]:
+    """
+    Retrieves a list of users from Telegram dialogs.
+
+    Args:
+        client: Initialized TelegramClient instance.
+
+    Returns:
+        List of dictionaries containing user information (id, name, auto_reply status, disabled_by_keyword).
+    """
+    try:
+        users = []
+        async for dialog in client.iter_dialogs():
+            entity = dialog.entity
+            if isinstance(entity, User):  # Only include user dialogs (not groups/channels)
+                user_data = {
+                    "id": entity.id,
+                    "name": entity.first_name or entity.username or "Unknown",
+                    "auto_reply": entity.id in auto_reply_users,
+                    "disabled_by_keyword": AUTO_REPLY_STATUS.get(entity.id, {}).get("disabled_by_keyword", None)
+                }
+                users.append(user_data)
+        logger.info(f"Retrieved {len(users)} users from dialogs")
+        return users
+    except Exception as e:
+        logger.error(f"Error retrieving dialog user list: {e}")
+        return []
+
+
+async def get_last_messages(client: TelegramClient, user_ids: List[int]) -> Dict[int, List[Dict]]:
+    """
+    Retrieves the last 10 messages for specified user IDs.
+
+    Args:
+        client: Initialized TelegramClient instance.
+        user_ids: List of user IDs to fetch messages for.
+
+    Returns:
+        Dictionary mapping user IDs to lists of their last 10 messages.
+    """
+    try:
+        messages = {}
+        for user_id in user_ids:
+            user_messages = []
+            async for message in client.iter_messages(user_id, limit=10):
+                sender = await message.get_sender()
+                user_messages.append({
+                    "sender": sender.first_name or sender.username or "Unknown" if sender else "Unknown",
+                    "timestamp": message.date.strftime("%Y-%m-%d %H:%M:%S"),
+                    "text": message.text or ""
+                })
+            messages[user_id] = user_messages[::-1]  # Reverse to show newest first
+        logger.info(f"Retrieved messages for {len(messages)} users")
+        return messages
+    except Exception as e:
+        logger.error(f"Error retrieving messages: {e}")
+        return {}

@@ -25,6 +25,7 @@ if not os.path.exists("templates"):
 
 # Initialize FastAPI app
 app = FastAPI()
+logger.info("FastAPI app initialized")
 
 # Initialize Telegram client
 session_string = None
@@ -41,6 +42,7 @@ client = TelegramClient(
     int(os.getenv("TG_API_ID")),
     os.getenv("TG_API_HASH")
 )
+logger.info("Telegram client initialized")
 
 # Initialize OpenAI client
 client_gpt = AsyncOpenAI(api_key=OPENAI_API_KEY)
@@ -75,11 +77,21 @@ async def startup_event():
     global started
     if not started:
         logger.info("Starting application initialization")
-        validate_env_vars()
         try:
+            logger.info("Validating environment variables")
+            validate_env_vars()
+            logger.info("Environment variables validated")
+            logger.info("Initializing Telegram client")
             await initialize_telegram_client()
-            init_web_routes(app, client, client_gpt)
-            logger.info("Web routes initialized")
+            logger.info("Telegram client initialization completed")
+            logger.info("Before initializing web routes")
+            try:
+                init_web_routes(app, client, client_gpt)
+                logger.info("After initializing web routes")
+            except Exception as e:
+                logger.error(f"Error during web routes initialization: {e}")
+                raise
+            logger.info("Initializing Telegram handlers")
             init_telegram_handlers(client, client_gpt)
             logger.info("Telegram handlers initialized")
             # Run Telegram client in the background with error handling
@@ -91,7 +103,7 @@ async def startup_event():
             client.loop.create_task(run_telegram_client())
             logger.info("Telegram client running in background")
         except Exception as e:
-            logger.error(f"Failed to initialize routes or handlers: {e}")
+            logger.error(f"Failed to initialize application: {e}")
             raise
         started = True
         logger.info("Application startup completed")

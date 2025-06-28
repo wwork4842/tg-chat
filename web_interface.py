@@ -27,10 +27,11 @@ if not os.path.exists("templates"):
 
 
 def init_web_routes(app: FastAPI, client, client_gpt):
-    logger.info("Initializing web routes")
+    logger.info("Starting initialization of web routes")
 
     # Reset chat history if invalid data detected
     try:
+        logger.info("Checking SQLite chat history")
         with sqlite3.connect(CONFIG["DB_PATH"], timeout=CONFIG["SQLITE_TIMEOUT"]) as conn:
             c = conn.cursor()
             c.execute("SELECT user_id, history FROM chat_history")
@@ -47,10 +48,12 @@ def init_web_routes(app: FastAPI, client, client_gpt):
                     logger.warning(f"Invalid JSON in SQLite for user {row[0]}, resetting chat history")
                     reset_chat_history()
                     break
+        logger.info("SQLite chat history check completed")
     except Exception as e:
         logger.error(f"Error checking SQLite chat history: {e}")
         reset_chat_history()
 
+    logger.info("Registering route: /")
     @app.get("/", response_class=HTMLResponse)
     async def gpt_message_form(request: Request):
         try:
@@ -78,6 +81,7 @@ def init_web_routes(app: FastAPI, client, client_gpt):
             logger.error(f"Error in gpt_message_form: {e}")
             return HTMLResponse(content=f"Internal server error: {str(e)}", status_code=500)
 
+    logger.info("Registering route: / (POST)")
     @app.post("/", response_class=HTMLResponse)
     async def send_gpt_message(
             request: Request,
@@ -164,6 +168,7 @@ def init_web_routes(app: FastAPI, client, client_gpt):
                 "preview_text": None
             })
 
+    logger.info("Registering route: /get-messages")
     @app.post("/get-messages", response_class=HTMLResponse)
     async def get_messages(
             request: Request,
@@ -234,6 +239,7 @@ def init_web_routes(app: FastAPI, client, client_gpt):
                 "preview_text": None
             })
 
+    logger.info("Registering route: /toggle-auto-reply")
     @app.post("/toggle-auto-reply", response_class=HTMLResponse)
     async def toggle_auto_reply(
             request: Request,
@@ -314,6 +320,7 @@ def init_web_routes(app: FastAPI, client, client_gpt):
                 "preview_text": None
             })
 
+    logger.info("Registering route: /preview-response")
     @app.post("/preview-response", response_class=HTMLResponse)
     async def preview_response(
             request: Request,
@@ -394,6 +401,7 @@ def init_web_routes(app: FastAPI, client, client_gpt):
                 logger.error(f"Error rendering template in preview_response: {template_e}")
                 return HTMLResponse(content="Internal server error", status_code=500)
 
+    logger.info("Registering route: /send-preview")
     @app.post("/send-preview", response_class=HTMLResponse)
     async def send_preview(
             request: Request,
@@ -458,6 +466,7 @@ def init_web_routes(app: FastAPI, client, client_gpt):
                 "preview_text": None
             })
 
+    logger.info("Registering route: /keywords")
     @app.get("/keywords", response_class=HTMLResponse)
     async def keywords_form(request: Request):
         try:
@@ -478,6 +487,7 @@ def init_web_routes(app: FastAPI, client, client_gpt):
             logger.error(f"Error in keywords_form: {e}")
             return HTMLResponse(content=f"Internal server error: {str(e)}", status_code=500)
 
+    logger.info("Registering route: /keywords (POST)")
     @app.post("/keywords", response_class=HTMLResponse)
     async def update_keywords(
             request: Request,
@@ -531,13 +541,16 @@ def init_web_routes(app: FastAPI, client, client_gpt):
                 "error": str(e)
             })
 
-    @app.get("/update-context", response_class=HTMLResponse)
+    logger.info("Registering route: /context")
+    @app.get("/context", response_class=HTMLResponse)
     async def update_context_form(request: Request):
+        logger.info("Handling GET /context request")
         try:
             if not os.path.exists(os.path.join("templates", "context.html")):
                 logger.error("context.html not found in templates directory")
                 return HTMLResponse(content="Template context.html not found", status_code=500)
             users = await asyncio.wait_for(get_dialog_user_list(client), timeout=15.0)
+            logger.info(f"Retrieved {len(users)} users for /context")
             return templates.TemplateResponse("context.html", {
                 "request": request,
                 "users": users,
@@ -552,6 +565,7 @@ def init_web_routes(app: FastAPI, client, client_gpt):
             logger.error(f"Error in update_context_form: {e}")
             return HTMLResponse(content=f"Internal server error: {str(e)}", status_code=500)
 
+    logger.info("Registering route: /update-context")
     @app.post("/update-context", response_class=HTMLResponse)
     async def update_context(
             request: Request,
@@ -661,6 +675,7 @@ def init_web_routes(app: FastAPI, client, client_gpt):
                 "context_preview_text": None
             })
 
+    logger.info("Registering route: /view-context/{user_id}")
     @app.get("/view-context/{user_id}", response_class=HTMLResponse)
     async def view_context(request: Request, user_id: int):
         try:
@@ -685,3 +700,6 @@ def init_web_routes(app: FastAPI, client, client_gpt):
                 "context_history": [],
                 "error": str(e)
             })
+
+    logger.info("Web routes initialization completed")
+
