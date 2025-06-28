@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 import asyncio
 from datetime import datetime
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging explicitly
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Configuration
@@ -36,23 +36,32 @@ NOTIFICATION_USER_ID = None
 
 def load_config():
     global NOTIFICATION_USER_ID
+    logger.info("Starting config load process")
     try:
         if os.path.exists(CONFIG["CONFIG_FILE"]):
             with open(CONFIG["CONFIG_FILE"], "r") as f:
                 config_data = json.load(f)
-                NOTIFICATION_USER_ID = config_data.get("notification_user_id", None)
-                if NOTIFICATION_USER_ID is not None:
-                    NOTIFICATION_USER_ID = int(NOTIFICATION_USER_ID)
-                logger.info(f"Loaded config: notification_user_id={NOTIFICATION_USER_ID}")
-                return NOTIFICATION_USER_ID
+                logger.info(f"Config file content: {config_data}")
+                loaded_notification_id = config_data.get("notification_user_id")
+                if loaded_notification_id is not None:
+                    NOTIFICATION_USER_ID = int(loaded_notification_id)
+                else:
+                    NOTIFICATION_USER_ID = None
+                logger.info(f"Config loaded: notification_user_id={loaded_notification_id}")
+                return loaded_notification_id
         logger.warning(f"Config file {CONFIG['CONFIG_FILE']} not found, using default None")
+        NOTIFICATION_USER_ID = None
         return None
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in config file {CONFIG['CONFIG_FILE']}: {e}")
+        NOTIFICATION_USER_ID = None
         return None
     except Exception as e:
         logger.error(f"Error loading config: {e}")
+        NOTIFICATION_USER_ID = None
         return None
+    finally:
+        logger.info(f"Config load process completed, NOTIFICATION_USER_ID={NOTIFICATION_USER_ID}")
 
 
 def save_config(notification_user_id: str | None):
@@ -66,20 +75,30 @@ def save_config(notification_user_id: str | None):
 
 
 def load_keywords():
+    global AUTO_REPLY_DISABLE_KEYWORDS
+    logger.info("Starting keywords load process")
     try:
         if os.path.exists(CONFIG["KEYWORDS_FILE"]):
             with open(CONFIG["KEYWORDS_FILE"], "r") as f:
                 keywords = json.load(f)
+                logger.info(f"Keywords file content: {keywords}")
                 if isinstance(keywords, list):
-                    return [keyword.strip().lower() for keyword in keywords]
+                    AUTO_REPLY_DISABLE_KEYWORDS = [keyword.strip().lower() for keyword in keywords]
+                    logger.info(f"Keywords loaded: {AUTO_REPLY_DISABLE_KEYWORDS}")
+                    return AUTO_REPLY_DISABLE_KEYWORDS
         logger.warning(f"Keywords file {CONFIG['KEYWORDS_FILE']} not found, using default")
-        return ["stop", "disable", "off"]  # Default keywords
+        AUTO_REPLY_DISABLE_KEYWORDS = ["stop", "disable", "off"]
+        return AUTO_REPLY_DISABLE_KEYWORDS
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in keywords file {CONFIG['KEYWORDS_FILE']}: {e}")
-        return ["stop", "disable", "off"]
+        AUTO_REPLY_DISABLE_KEYWORDS = ["stop", "disable", "off"]
+        return AUTO_REPLY_DISABLE_KEYWORDS
     except Exception as e:
         logger.error(f"Error loading keywords: {e}")
-        return ["stop", "disable", "off"]
+        AUTO_REPLY_DISABLE_KEYWORDS = ["stop", "disable", "off"]
+        return AUTO_REPLY_DISABLE_KEYWORDS
+    finally:
+        logger.info(f"Keywords load process completed, AUTO_REPLY_DISABLE_KEYWORDS={AUTO_REPLY_DISABLE_KEYWORDS}")
 
 
 def save_keywords(keywords: List[str]):
@@ -151,11 +170,13 @@ def reset_chat_history():
 
 def load_data():
     global auto_reply_users, CHAT_HISTORY, AUTO_REPLY_STATUS, AUTO_REPLY_DISABLE_KEYWORDS, NOTIFICATION_USER_ID
+    logger.info("Starting data load process")
     try:
         # Load auto-reply users
         if os.path.exists(CONFIG["AUTO_REPLY_FILE"]):
             with open(CONFIG["AUTO_REPLY_FILE"], "r") as f:
                 auto_reply_users.update(set(json.load(f)))
+            logger.info(f"Loaded auto-reply users: {list(auto_reply_users)}")
 
         # Load from SQLite
         with sqlite3.connect(CONFIG["DB_PATH"], timeout=CONFIG["SQLITE_TIMEOUT"]) as conn:
@@ -176,16 +197,28 @@ def load_data():
             c.execute("SELECT user_id, disabled_by_keyword FROM auto_reply_status")
             AUTO_REPLY_STATUS.update(
                 {row[0]: {"disabled_by_keyword": row[1]} for row in c.fetchall() if row[1] is not None})
+            logger.info(
+                f"Loaded chat history: {list(CHAT_HISTORY.keys())} users, auto-reply status: {list(AUTO_REPLY_STATUS.keys())} users")
 
         logger.info(
-            f"Data loaded: {len(auto_reply_users)} auto-reply users, {len(CHAT_HISTORY)} chat history users, {len(AUTO_REPLY_STATUS)} auto-reply status entries")
+            f"Data loaded (step 1): {len(auto_reply_users)} auto-reply users, {len(CHAT_HISTORY)} chat history users, {len(AUTO_REPLY_STATUS)} auto-reply status entries")
 
+        # Load keywords and update global variable
         AUTO_REPLY_DISABLE_KEYWORDS = load_keywords()
+        logger.info(f"Keywords loaded and set (step 2): {AUTO_REPLY_DISABLE_KEYWORDS}")
+
+        # Load config and update global variable
         NOTIFICATION_USER_ID = load_config()
+        logger.info(f"Notification user ID loaded and set (step 3): {NOTIFICATION_USER_ID}")
+
+        logger.info(
+            f"Final data loaded: auto_reply_users={list(auto_reply_users)}, keywords={AUTO_REPLY_DISABLE_KEYWORDS}, notification_user_id={NOTIFICATION_USER_ID}")
     except Exception as e:
         logger.error(f"Error loading data: {e}")
         CHAT_HISTORY.clear()
         AUTO_REPLY_STATUS.clear()
+    finally:
+        logger.info("Data load process completed")
 
 
 def save_data():

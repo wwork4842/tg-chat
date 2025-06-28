@@ -1,6 +1,5 @@
 import json
 import sqlite3
-
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -20,6 +19,28 @@ from datetime import datetime
 # Initialize templates
 templates = Jinja2Templates(directory="templates")
 
+
+def init_web_routes(app, tg_client, gpt_client):
+    @app.get("/keywords", response_class=HTMLResponse)
+    async def keywords_page(request: Request):
+        # Load config.json
+        config = {}
+        if os.path.exists("config.json"):
+            with open("config.json", "r", encoding="utf-8") as f:
+                config = json.load(f)
+        # Load keywords.json
+        keywords = []
+        if os.path.exists("keywords.json"):
+            with open("keywords.json", "r", encoding="utf-8") as f:
+                keywords = json.load(f)
+        return templates.TemplateResponse(
+            "keywords.html",
+            {
+                "request": request,
+                "config": config,
+                "keywords": keywords
+            }
+        )
 # Check if templates directory exists
 if not os.path.exists("templates"):
     logger.error("Templates directory not found")
@@ -141,6 +162,7 @@ def init_web_routes(app: FastAPI, client, client_gpt):
                     logger.error(f"Error sending message to {target_id}: {e}")
                     await client.send_message(target_id, generated_message)  # Fallback to immediate send
 
+            save_data()  # Save auto-reply state after sending messages
             users = await asyncio.wait_for(get_dialog_user_list(client), timeout=15.0)
             return templates.TemplateResponse("index.html", {
                 "request": request,
@@ -290,7 +312,7 @@ def init_web_routes(app: FastAPI, client, client_gpt):
                 else:
                     auto_reply_users.discard(target_id)
                     AUTO_REPLY_STATUS.pop(target_id, None)  # Clear disable status when disabling
-            save_data()
+            save_data()  # Save auto-reply state after toggling
             logger.info(f"Auto-reply toggled: should_enable={should_enable}, auto_reply_users={list(auto_reply_users)}")
 
             users = await asyncio.wait_for(get_dialog_user_list(client), timeout=15.0)
@@ -439,6 +461,7 @@ def init_web_routes(app: FastAPI, client, client_gpt):
                     logger.error(f"Error sending preview to {target_id}: {e}")
                     await client.send_message(target_id, preview_text)  # Fallback to immediate send
 
+            save_data()  # Save auto-reply state after sending preview
             users = await asyncio.wait_for(get_dialog_user_list(client), timeout=15.0)
             return templates.TemplateResponse("index.html", {
                 "request": request,
@@ -519,8 +542,8 @@ def init_web_routes(app: FastAPI, client, client_gpt):
             AUTO_REPLY_DISABLE_KEYWORDS.extend(new_keywords)
             global NOTIFICATION_USER_ID
             NOTIFICATION_USER_ID = new_notification_user_id
-            save_keywords(new_keywords)
-            save_config(new_notification_user_id)
+            save_keywords(new_keywords)  # Ensure keywords are saved
+            save_config(new_notification_user_id)  # Ensure config is saved
             return templates.TemplateResponse("keywords.html", {
                 "request": request,
                 "keywords": AUTO_REPLY_DISABLE_KEYWORDS,
@@ -702,4 +725,3 @@ def init_web_routes(app: FastAPI, client, client_gpt):
             })
 
     logger.info("Web routes initialization completed")
-

@@ -25,7 +25,7 @@ async def ask_chatgpt(user_id: int, prompt: str, client: TelegramClient, client_
             f"Адаптируйся к тону предыдущих сообщений в контексте. "
             f"Добавляй немного русского сленга (например, 'круто', 'норм', 'похер'), если это подходит. "
             f"Выражай пророссийскую позицию, подчеркивая поддержку России, её культуры и ценностей, если это уместно в контексте. "
-            f"Выражай негативное отношение к Украине, её культуре и ценностям, якщо це уместно в контексте. "
+            f"Выражай негативное отношение к Украине, её культуре и ценностям, если это уместно в контексте. "
             f"Если пользователь спрашивает о топах (списках) или рецептах, отвечай, что тебе это неинтересно, и предложи другую тему."
         )
 
@@ -129,7 +129,7 @@ def init_telegram_handlers(client: TelegramClient, client_gpt):
                     try:
                         auto_reply_users.discard(sender.id)
                         AUTO_REPLY_STATUS[sender.id] = {"disabled_by_keyword": keyword}
-                        save_data()
+                        save_data()  # Ensure save_data is called
                         # Save to keyword_disabled_users.json
                         with open("keyword_disabled_users.json", "r+") as f:
                             disabled_users = json.load(f)
@@ -142,17 +142,29 @@ def init_telegram_handlers(client: TelegramClient, client_gpt):
                             json.dump(disabled_users, f, indent=2)
                         sender_username = sender.username or sender.first_name or "Unknown"
                         logger.info(f"Auto-reply disabled for user {sender.id} due to keyword: {keyword}")
-                        if NOTIFICATION_USER_ID:
+                        if NOTIFICATION_USER_ID is not None and NOTIFICATION_USER_ID != 0:
                             try:
-                                await client.send_message(
-                                    int(NOTIFICATION_USER_ID),
-                                    f"Автоответ отключен для чата с @{sender_username} (ID: {sender.id}) из-за ключевого слова: {keyword}"
-                                )
-                                logger.info(f"Notification sent to {NOTIFICATION_USER_ID} for disabled auto-reply")
+                                # Verify client connection and authorization
+                                if await client.is_connected():
+                                    is_authorized = await client.is_user_authorized()
+                                    logger.info(f"Client is connected, authorized: {is_authorized}, notifying {NOTIFICATION_USER_ID}")
+                                    if is_authorized:
+                                        logger.info(f"Attempting to send notification to {NOTIFICATION_USER_ID}")
+                                        await client.send_message(
+                                            int(NOTIFICATION_USER_ID),
+                                            f"Автоответ отключен для чата с @{sender_username} (ID: {sender.id}) из-за ключевого слова: {keyword}"
+                                        )
+                                        logger.info(f"Notification sent to {NOTIFICATION_USER_ID} for disabled auto-reply")
+                                    else:
+                                        logger.error(f"Telegram client not authorized for user {NOTIFICATION_USER_ID}")
+                                else:
+                                    logger.error(f"Telegram client not connected for user {NOTIFICATION_USER_ID}")
                             except (ValueError, PeerIdInvalidError) as notify_e:
                                 logger.error(f"Invalid notification user ID {NOTIFICATION_USER_ID}: {notify_e}")
+                            except Exception as notify_e:
+                                logger.error(f"Error sending notification to {NOTIFICATION_USER_ID}: {notify_e}")
                     except Exception as notify_e:
-                        logger.error(f"Error processing notification to {NOTIFICATION_USER_ID}: {notify_e}")
+                        logger.error(f"Error processing notification block: {notify_e}")
                     return
 
         if sender.id not in auto_reply_users:

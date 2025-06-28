@@ -31,7 +31,7 @@
             font-weight: bold;
             color: #444;
         }
-        input[type="text"] {
+        input[type="text"], textarea {
             width: 100%;
             padding: 8px;
             border: 1px solid #ddd;
@@ -46,6 +46,7 @@
             border-radius: 4px;
             cursor: pointer;
             font-size: 16px;
+            margin-right: 10px;
         }
         button:hover {
             background-color: #0056b3;
@@ -69,25 +70,10 @@
             margin-top: 5px;
         }
         .keywords-list {
-            margin-top: 20px;
-            padding: 15px;
-            background-color: #f9f9f9;
+            margin: 10px 0;
+            padding: 10px;
+            background: #f0f0f0;
             border-radius: 4px;
-        }
-        .keywords-list h3 {
-            margin-top: 0;
-            color: #333;
-        }
-        .keywords-list ul {
-            list-style-type: none;
-            padding: 0;
-        }
-        .keywords-list li {
-            padding: 5px 0;
-            border-bottom: 1px solid #eee;
-        }
-        .keywords-list li:last-child {
-            border-bottom: none;
         }
         .back-link {
             display: inline-block;
@@ -98,54 +84,31 @@
         .back-link:hover {
             text-decoration: underline;
         }
-        .notification-id {
-            margin-top: 20px;
-            padding: 15px;
-            background-color: #f9f9f9;
-            border-radius: 4px;
-        }
-        .notification-id h3 {
-            margin-top: 0;
-            color: #333;
-        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Manage Auto-Reply Keywords</h1>
-        <form method="post" action="/keywords">
+        <h1>Manage Auto-Reply Disable Keywords</h1>
+        <form method="POST" action="/keywords">
             <div class="form-group">
-                <label for="keywords">Auto-Reply Disable Keywords</label>
-                <input type="text" name="keywords" id="keywords" value="{{ keywords | join(', ') }}" placeholder="e.g., stop, disable, off">
-                <div class="note">Enter comma-separated keywords that will disable auto-reply when used in a message.</div>
+                <label for="keywords">Keywords (comma-separated):</label>
+                <input type="text" name="keywords" id="keywords" value="{{ keywords | join(', ') }}">
+                <div class="note">If a message from a user contains any of these keywords, auto-reply will be disabled for that user.</div>
             </div>
             <div class="form-group">
-                <label for="notification_user_id">Notification User ID</label>
-                <input type="text" name="notification_user_id" id="notification_user_id" value="{{ notification_user_id | default('') }}" placeholder="e.g., 123456789">
-                <div class="note">Enter the Telegram user ID to receive notifications about auto-reply disabling. Leave empty to disable notifications.</div>
+                <label for="notification_user_id">Notification User ID (optional):</label>
+                <input type="text" name="notification_user_id" id="notification_user_id" value="{{ notification_user_id | default('') }}">
+                <div class="note">If set, this user will receive a notification when auto-reply is disabled by a keyword.</div>
             </div>
-            <button type="submit">Update Settings</button>
+            <button type="submit">Update Keywords</button>
         </form>
 
         <div class="keywords-list">
-            <h3>Current Keywords</h3>
+            <strong>Current Keywords:</strong>
             {% if keywords %}
-                <ul>
-                    {% for keyword in keywords %}
-                        <li>{{ keyword }}</li>
-                    {% endfor %}
-                </ul>
+                {{ keywords | join(', ') }}
             {% else %}
-                <p>No keywords defined.</p>
-            {% endif %}
-        </div>
-
-        <div class="notification-id">
-            <h3>Current Notification User ID</h3>
-            {% if notification_user_id %}
-                <p>{{ notification_user_id }}</p>
-            {% else %}
-                <p>No notification user ID set.</p>
+                <em>No keywords set.</em>
             {% endif %}
         </div>
 
